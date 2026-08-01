@@ -55,7 +55,7 @@ yarn test:integration  Run tests/integration
 - Minimal authentication: Argon2 and JSON Web Token.
 - Configuration and logging: dotenv, Morgan, Pino, Pino HTTP, and Pino Pretty.
 - Data and infrastructure clients: PostgreSQL (`pg`), Prisma, Redis, KafkaJS, Elasticsearch, and `ws`.
-- Observability and payments: OpenTelemetry Node SDK, automatic instrumentation, OTLP HTTP exporters, Pino instrumentation, and Stripe.
+- Observability: OpenTelemetry Node SDK, automatic instrumentation, OTLP HTTP exporters, and Pino instrumentation.
 - TypeScript runtime/build: TypeScript and tsx.
 - Tests: Vitest, V8 coverage, Supertest, Testcontainers, service-specific PostgreSQL/Redis/Kafka/Elasticsearch containers, and required type packages.
 - Code quality: ESLint flat config, TypeScript-ESLint, Prettier, and ESLint’s Prettier compatibility config.
@@ -71,7 +71,6 @@ WebSocket phase       ws
 Elasticsearch phase   @elastic/elasticsearch
 Kafka phase           kafkajs
 OpenTelemetry phase   Node SDK, auto-instrumentation, Pino instrumentation, OTLP exporters
-Payments phase        Stripe SDK
 ```
 
 Having a package installed does not move that technology earlier in the roadmap. Do not initialize, configure, connect, or introduce it into application code until its phase begins or the user explicitly asks.
@@ -145,7 +144,7 @@ Register
 → receive a notification
 ```
 
-Add `checkins`, `reviews`, `chat`, `moderation`, `search`, and `payments` progressively.
+Add `checkins`, `reviews`, `chat`, `moderation`, and `search` progressively.
 
 ## Architecture
 
@@ -181,7 +180,6 @@ src/
     notifications/
     reviews/
     moderation/
-    payments/
     search/
 
   infrastructure/
@@ -317,13 +315,13 @@ Invitations are deferred. If added later, use an in-app invitation for an existi
 id, communityId, createdByUserId, title, slug, description, imageUrl,
 format, status, visibility, startsAt, endsAt, timezone, capacity,
 reservationOpensAt, reservationClosesAt, cancellationDeadline,
-priceAmount, priceCurrency, createdAt, updatedAt, publishedAt, cancelledAt
+createdAt, updatedAt, publishedAt, cancelledAt
 ```
 
 - Format: `IN_PERSON`, `ONLINE`, `HYBRID`
 - Status: `DRAFT`, `PUBLISHED`, `CANCELLED`, `COMPLETED`, `ARCHIVED`
 - Visibility: `PUBLIC`, `COMMUNITY_ONLY`, `INVITE_ONLY`
-- Free event: `priceAmount = 0`; currency may be null
+  All Gatherly events are free. The domain does not model prices or financial transactions.
 
 `event_locations` stores venue/address/geolocation, online meeting URL, and instructions. `event_interests` connects events to interests.
 
@@ -383,7 +381,7 @@ POST   /events/:eventId/waitlist/promote-next
 id, userId, type, title, message, data, readAt, createdAt
 ```
 
-The JSON `data` field may reference an event, community, or reservation. Notification types include reservation confirmation/cancellation, waitlist entry/promotion, event update/cancellation, new message, membership approval, and later payment results.
+The JSON `data` field may reference an event, community, or reservation. Notification types include reservation confirmation/cancellation, waitlist entry/promotion, event update/cancellation, new message, and membership approval.
 
 `notification_preferences` controls in-app reminders, chat notifications, and community announcements. A later `notification_deliveries` table can track in-app or push delivery status, attempts, timestamps, and failure reasons. Email is not a supported channel.
 
@@ -402,7 +400,6 @@ PATCH /notification-preferences
 - **Reviews:** rating 1–5, one per attendee/event, allowed only after event end and only for checked-in attendees.
 - **Moderation:** reports, community bans, user blocks, platform actions, and append-oriented audit logs.
 - **Search:** start with PostgreSQL; add Elasticsearch only when product requirements justify typo tolerance, autocomplete, facets, geo-distance, or ranking.
-- **Payments:** start with free, pay-at-location, or external-link events. Later use a fake provider and then hosted Stripe Checkout with verified, idempotent webhooks.
 
 ## Essential data relationships
 
@@ -423,7 +420,7 @@ Event
 
 Reservation
   ├─ belongs to User and Event
-  └─ may have one Checkin and one Payment
+  └─ may have one Checkin
 ```
 
 ## Non-negotiable business invariants
@@ -491,11 +488,20 @@ Add each technology only when there is a demonstrated lesson or product need:
 4. Add WebSockets for persisted chat, typing, presence, and moderation.
 5. Add Elasticsearch as a rebuildable search projection with a full reindex command.
 6. Add Kafka for domain events and asynchronous consumers using a transactional outbox and idempotent processing.
-7. Add hosted payments only after reservations are reliable.
-8. Add Pino structured logs, OpenTelemetry traces, metrics, Prometheus/Grafana/Tempo, and Uptime Kuma.
-9. Add CI/CD, immutable images, staging, smoke tests, backups, restore tests, rollback planning, and failure/load testing.
+7. Add Pino structured logs, OpenTelemetry traces, metrics, Prometheus/Grafana/Tempo, and Uptime Kuma.
+8. Add CI/CD, immutable images, staging, smoke tests, backups, restore tests, rollback planning, and failure/load testing.
 
 Do not add Kubernetes or split the modular monolith into microservices for this project.
+
+### Late-stage deployment question
+
+When the application is deployed with Docker, investigate:
+
+> How can Gatherly deploy a new immutable application image without stopping the currently working container first, so users do not experience a minute of total downtime?
+
+Use this question to learn readiness checks, graceful shutdown, reverse-proxy traffic switching, running old and new containers simultaneously, rolling or blue-green deployments, backward-compatible database migrations, automated rollback, and draining long-lived HTTP/SSE/WebSocket connections. Do not implement this machinery during the early learning phases.
+
+**Reverse-proxy decision:** use Nginx rather than Apache if Gatherly is eventually deployed. Nginx will sit in front of the Node/Express container to terminate TLS, expose ports 80/443, proxy HTTP/WebSocket/SSE traffic, and later help switch traffic between old and new application containers. It is not needed for local development and should not be installed or configured until the deployment stage.
 
 ## Testing priorities
 
@@ -515,14 +521,13 @@ Prioritize behavior over a coverage percentage:
 
 ## Infrastructure principles
 
-- PostgreSQL is authoritative for users, memberships, events, reservations, waitlists, payments, and messages.
+- PostgreSQL is authoritative for users, memberships, events, reservations, waitlists, and messages.
 - Redis is disposable acceleration and temporary coordination.
 - Elasticsearch is a rebuildable projection.
 - WebSocket and SSE connections are transports, not databases.
 - Kafka consumers are idempotent; producers use a transactional outbox for database-originated domain events.
 - Normal HTTP responses do not wait for unrelated asynchronous consumers.
-- Payments are confirmed only from a verified provider webhook/API, never from browser claims.
-- Logs never contain passwords, authentication tokens, cookies, payment data, or private chat bodies by default.
+- Logs never contain passwords, authentication tokens, cookies, or private chat bodies by default.
 
 ## Deferred scope
 
@@ -537,7 +542,6 @@ Do not build these unless the learning goal changes materially:
 - Any transactional or marketing email delivery; use in-app notifications instead
 - Kubernetes or microservices
 - Event sourcing
-- Complex subscriptions, international tax, or marketplace payouts
 
 Useful later topics include HTTP/TCP/DNS/TLS, CORS/CSRF/XSS defenses, API versioning, generated clients, S3-compatible uploads, background jobs, backups/restoration, feature flags, rate limiting, abuse prevention, retention/deletion, account export, time zones/DST, accessibility, and product analytics.
 
@@ -560,10 +564,9 @@ Useful later topics include HTTP/TCP/DNS/TLS, CORS/CSRF/XSS defenses, API versio
 14. WebSockets and chat
 15. Elasticsearch
 16. Kafka and transactional outbox
-17. Payments
-18. Logging and tracing
-19. CI/CD and production hardening
-20. Performance and failure testing
+17. Logging and tracing
+18. CI/CD and production hardening
+19. Performance and failure testing
 ```
 
 Real users intentionally appear before most advanced infrastructure. Their behavior should determine which later capabilities deserve investment.

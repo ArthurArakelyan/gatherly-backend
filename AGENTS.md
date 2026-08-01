@@ -30,7 +30,7 @@ register → profile → join community → view event → reserve
 → cancel → promote next waitlisted user → notify affected users
 ```
 
-Later modules are `checkins`, `reviews`, `chat`, `moderation`, `search`, and `payments`. Do not introduce them into an earlier milestone unless the user explicitly asks.
+Later modules are `checkins`, `reviews`, `chat`, `moderation`, and `search`. Do not introduce them into an earlier milestone unless the user explicitly asks.
 
 ## Architectural rules
 
@@ -76,7 +76,7 @@ Do not create microservices, Kubernetes configuration, or event sourcing unless 
 - A `User` has one profile and many memberships, reservations, waitlist entries, messages, notifications, and reviews.
 - A `Community` has memberships, events, interests, and community conversations.
 - An `Event` belongs to a community and creator; it has a location, reservations, waitlist entries, check-ins, reviews, and optionally an event conversation.
-- A `Reservation` belongs to a user and event and may later have a check-in and payment.
+- A `Reservation` belongs to a user and event and may later have a check-in.
 - A `WaitlistEntry` belongs to a user and event and is initially ordered by `joinedAt ASC`.
 - Platform roles and community roles are separate concepts.
 - Community deletion initially means transition to `ARCHIVED`, not destructive deletion.
@@ -121,7 +121,7 @@ Respect the progressive roadmap unless the user requests a different phase:
 7. Docker and serious behavioral testing.
 8. Query measurement and targeted database indexes.
 9. Redis, SSE, WebSockets, Elasticsearch, and Kafka—in that order and only with a concrete use.
-10. Payments, observability, CI/CD, and production hardening.
+10. Observability, CI/CD, and production hardening.
 
 Do not hide a lesson the current phase is intended to teach. For example, during the raw-SQL phase, do not replace the exercise with Prisma; during the in-memory phase, do not introduce PostgreSQL.
 
@@ -135,7 +135,6 @@ Do not hide a lesson the current phase is intended to teach. For example, during
 - **WebSockets:** bidirectional chat, typing, presence, moderation, and live Q&A. Persist messages before broadcasting them.
 - **Elasticsearch:** rebuildable discovery index, introduced after PostgreSQL search limitations are understood. Provide a full reindex operation.
 - **Kafka:** late-stage asynchronous domain events. Use a transactional outbox and idempotent consumers; expect duplicate delivery.
-- **Payments:** free/pay-at-location/external link first. Later use hosted checkout and verified idempotent webhooks.
 - **OpenTelemetry/Pino:** traces, metrics, and structured logs. Morgan is used earlier to learn HTTP middleware.
 - **Docker:** reproducible environments, introduced progressively; ordinary development should not require every optional service.
 
@@ -152,8 +151,8 @@ Authentication is deliberately simple because the project owner has already buil
 - Hash check-in or shareable invitation codes where applicable.
 - Validate every untrusted boundary and return a consistent safe error shape.
 - Authorize the requested object, not merely the endpoint role.
-- Do not trust client-supplied ownership, price, capacity, role, attendance, or payment state.
-- Never log passwords, authentication tokens, cookie values, payment details, or private message content by default.
+- Do not trust client-supplied ownership, capacity, role, or attendance state.
+- Never log passwords, authentication tokens, cookie values, or private message content by default.
 - Audit sensitive moderation, membership-role, event-cancellation, and reservation-removal actions.
 
 ## API conventions
@@ -164,19 +163,17 @@ Authentication is deliberately simple because the project owner has already buil
 - Include request IDs in logs and error responses where useful.
 - Use pagination for collection endpoints; prefer keyset pagination when scale/query shape justifies it.
 - Specify sorting and filtering semantics explicitly.
-- Add idempotency keys to mutation endpoints with meaningful retry risk, especially reservations and payments.
+- Add idempotency keys to mutation endpoints with meaningful retry risk, especially reservations.
 - Maintain OpenAPI documentation as endpoints stabilize.
 - Avoid leaking private-community, session, token, moderation, or internal audit data through DTOs.
 
 Endpoint paths in `README.md` are suggested defaults. Preserve them when practical, but favor coherent REST semantics over blindly copying a list.
 
-## Time and money
+## Time handling
 
 - Store instants consistently (normally UTC) and preserve the event’s IANA time-zone identifier for display and recurrence rules.
 - Treat recurring events as a later feature requiring explicit DST tests and idempotent generation.
-- Represent money with integer minor units or an appropriate exact decimal strategy—never binary floating point.
-- Model reservation and payment state transitions explicitly.
-- Never mark payment successful based only on a browser redirect or client request.
+- Model reservation state transitions explicitly.
 
 ## Testing expectations
 
@@ -224,6 +221,7 @@ Favor behavioral confidence over an arbitrary coverage percentage.
 
 ## Observability and operations
 
+- Nginx is the chosen future reverse proxy; do not introduce Apache. Nginx is deployment-only and should not be installed or configured during ordinary local development.
 - Development may use readable Morgan request output plus Pino application logs.
 - Production logs should be structured and correlate request, trace, user, community, and event IDs where safe.
 - Health endpoints are `/health/live` and `/health/ready`; metrics are exposed at `/metrics` when observability is introduced.
@@ -235,12 +233,11 @@ Favor behavioral confidence over an arbitrary coverage percentage.
 Avoid speculative completeness. In particular, defer:
 
 - Multi-place reservations
-- Paid events and refunds until free reservations are reliable
 - Recurring events until core one-time events work
 - QR check-in, chat, advanced moderation, and recommendations until the MVP flow works
 - Elasticsearch until PostgreSQL search has measured shortcomings
 - Kafka until there is real asynchronous work
-- Native apps, video/livestreaming, custom email/OAuth systems, crypto, complex billing/tax, Kubernetes, microservices, and event sourcing
+- Native apps, video/livestreaming, custom email/OAuth systems, crypto, Kubernetes, microservices, and event sourcing
 - All transactional and marketing email delivery, including verification, reset, invitation, reminder, and announcement emails
 
 When the user asks what API to build next, identify the current roadmap phase, propose the smallest vertical slice, list its business rules and tests, and avoid pulling later infrastructure forward merely because it appears in the long-term roadmap.
