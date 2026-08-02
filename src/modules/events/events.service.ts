@@ -14,7 +14,7 @@ export class EventsService {
   ): Promise<Event> {
     const authorization = await this.repository.findCreationAuthorization(communityId, userId);
 
-    if (authorization === null || authorization.communityStatus !== 'ACTIVE') {
+    if (authorization?.communityStatus !== 'ACTIVE') {
       throw new AppError(404, 'COMMUNITY_NOT_FOUND', 'The requested community does not exist');
     }
     if (

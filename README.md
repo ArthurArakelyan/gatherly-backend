@@ -192,7 +192,7 @@ yarn test
 yarn build
 ```
 
-Start the current foundation server in watch mode:
+Start the Express API in watch mode:
 
 ```bash
 yarn dev
@@ -203,7 +203,13 @@ override bind-mounts the source and enables polling so file watching works
 reliably through Docker Desktop. Plain `docker compose up --build` runs the
 immutable production-style image, where source edits require rebuilding.
 
-It currently uses `node:http`, intentionally matching Phase 0, and exposes `GET /health`. Express is installed for Phase 2 but has not replaced the foundation exercise yet.
+The current Phase 2 API exposes `GET /health/live`, `GET /health/ready`,
+communities, memberships, public events, reservations, and waitlists. Its full
+implemented contract is in [`docs/openapi.yaml`](./docs/openapi.yaml). It is
+assembled from module-specific files under [`docs/openapi/`](./docs/openapi/).
+The
+development-only `x-user-id` header is temporary; Phase 4 replaces it with real
+authentication.
 
 ### Available scripts
 
@@ -222,10 +228,16 @@ yarn test:coverage     Generate text, HTML, and LCOV coverage
 yarn test:unit         Run tests/unit
 yarn test:api          Run tests/api
 yarn test:integration  Run tests/integration
+yarn test:e2e          Run tests/e2e
 yarn db:migrate        Apply pending migrations from TypeScript
 yarn db:migrate:prod   Apply pending migrations from compiled JavaScript
 yarn db:seed           Insert repeatable development data
 ```
+
+Integration and API tests start an isolated PostgreSQL Testcontainers database,
+apply the same SQL migrations, and never use the Compose development volume.
+Docker must be running for `yarn test`, `yarn test:api`, and
+`yarn test:integration`.
 
 ### Installed package groups
 

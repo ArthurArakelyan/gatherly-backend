@@ -1,0 +1,62 @@
+collection:
+  get:
+    tags: [Communities]
+    summary: List active public communities
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/Page'
+      - $ref: '../../openapi.yaml#/components/parameters/Limit'
+    responses:
+      '200':
+        description: Paginated communities.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data, pagination]
+              properties:
+                data:
+                  type: array
+                  items: { $ref: '../../openapi.yaml#/components/schemas/Community' }
+                pagination: { $ref: '../../openapi.yaml#/components/schemas/Pagination' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+  post:
+    tags: [Communities]
+    summary: Create a community and an OWNER membership for the caller
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../../openapi.yaml#/components/schemas/CreateCommunity' }
+    responses:
+      '201':
+        description: Community created.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data: { $ref: '../../openapi.yaml#/components/schemas/Community' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '409': { $ref: '../../openapi.yaml#/components/responses/Error' }
+item:
+  get:
+    tags: [Communities]
+    summary: Get an active community
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/CommunityId'
+    responses:
+      '200':
+        description: Community returned.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data: { $ref: '../../openapi.yaml#/components/schemas/Community' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '404': { $ref: '../../openapi.yaml#/components/responses/Error' }

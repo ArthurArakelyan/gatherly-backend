@@ -199,7 +199,7 @@ export class ReservationTransactionRepository {
       [userId, scope, key],
     );
     const record = existing.rows[0];
-    if (record === undefined || record.request_hash !== requestHash) return { kind: 'CONFLICT' };
+    if (record?.request_hash !== requestHash) return { kind: 'CONFLICT' };
     if (record.response_status === null || record.response_body === null) {
       return { kind: 'INCOMPLETE' };
     }

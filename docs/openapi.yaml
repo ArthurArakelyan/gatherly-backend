@@ -1,0 +1,278 @@
+openapi: 3.1.0
+info:
+  title: Gatherly API
+  version: 0.1.0
+  description: |
+    The implemented Phase 2 raw-SQL API. PostgreSQL is the durable source of truth.
+    `x-user-id` is development-only identity and is replaced by authentication in Phase 4.
+servers:
+  - url: http://localhost:3000
+tags:
+  - name: Health
+    description: Process liveness and PostgreSQL readiness checks.
+  - name: Communities
+    description: Public community discovery and community creation.
+  - name: Memberships
+    description: Joining and leaving community membership.
+  - name: Events
+    description: Event creation and public event discovery.
+  - name: Reservations
+    description: Capacity-safe reservations, waitlists, cancellation, and idempotency.
+paths:
+  /health/live:
+    $ref: ./openapi/health/paths.yaml#/live
+  /health/ready:
+    $ref: ./openapi/health/paths.yaml#/ready
+  /api/communities:
+    $ref: ./openapi/communities/paths.yaml#/collection
+  /api/communities/{communityId}:
+    $ref: ./openapi/communities/paths.yaml#/item
+  /api/communities/{communityId}/join:
+    $ref: ./openapi/memberships/paths.yaml#/join
+  /api/communities/{communityId}/leave:
+    $ref: ./openapi/memberships/paths.yaml#/leave
+  /api/communities/{communityId}/events:
+    $ref: ./openapi/events/paths.yaml#/create
+  /api/events:
+    $ref: ./openapi/events/paths.yaml#/collection
+  /api/events/{eventId}:
+    $ref: ./openapi/events/paths.yaml#/item
+  /api/events/{eventId}/reservations:
+    $ref: ./openapi/reservations/paths.yaml#/create
+  /api/events/{eventId}/reservations/me:
+    $ref: ./openapi/reservations/paths.yaml#/mine
+  /api/events/{eventId}/waitlist/me:
+    $ref: ./openapi/reservations/paths.yaml#/waitlist
+components:
+  parameters:
+    CommunityId:
+      name: communityId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RequestUserId:
+      name: x-user-id
+      in: header
+      required: true
+      description: Development-only request identity; not authentication.
+      schema: { type: string, format: uuid }
+      example: 00000000-0000-4000-8000-000000000001
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated unique key for one reservation intent.
+      schema: { type: string, minLength: 1, maxLength: 200 }
+      example: reserve-3af4d1c5-251b-4d41-a3a4-4f1f6dd2a1a7
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string, format: uuid }
+            details: {}
+      example:
+        error:
+          code: VALIDATION_ERROR
+          message: Request validation failed
+          requestId: 080f081c-d9a5-4a8d-8dd8-1d74f0137e55
+          details:
+            issues:
+              - path: body.capacity
+                message: 'Too small: expected number to be >0'
+    Community:
+      type: object
+      required: [id, name, slug, description, city, country, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        city: { type: [string, 'null'] }
+        country: { type: [string, 'null'] }
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      example:
+        id: 8e3cbca7-8f4c-45af-bbb5-6318274c7a3b
+        name: Moscow Board Games
+        slug: moscow-board-games
+        description: Weekly friendly board-game sessions.
+        city: Moscow
+        country: RU
+        createdByUserId: 00000000-0000-4000-8000-000000000001
+        createdAt: '2030-08-01T12:00:00.000Z'
+        updatedAt: '2030-08-01T12:00:00.000Z'
+    CreateCommunity:
+      type: object
+      additionalProperties: false
+      required: [name, slug]
+      properties:
+        name: { type: string, minLength: 3, maxLength: 100 }
+        slug: { type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }
+        description: { type: string, maxLength: 2000, default: '' }
+        city: { type: string, minLength: 1, maxLength: 100 }
+        country: { type: string, minLength: 2, maxLength: 100 }
+      example:
+        name: Moscow Board Games
+        slug: moscow-board-games
+        description: Weekly friendly board-game sessions.
+        city: Moscow
+        country: RU
+    Event:
+      type: object
+      required:
+        [
+          id,
+          communityId,
+          createdByUserId,
+          title,
+          slug,
+          description,
+          format,
+          status,
+          visibility,
+          startsAt,
+          endsAt,
+          timezone,
+          capacity,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        communityId: { type: string, format: uuid }
+        createdByUserId: { type: string, format: uuid }
+        title: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        format: { type: string, enum: [IN_PERSON, ONLINE, HYBRID] }
+        status: { type: string, enum: [PUBLISHED, CANCELLED, COMPLETED] }
+        visibility: { type: string, enum: [PUBLIC, COMMUNITY_ONLY, INVITE_ONLY] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        timezone: { type: string }
+        capacity: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      example:
+        id: 7cb66570-cc92-4f3d-8a61-043b3dc39e77
+        communityId: 8e3cbca7-8f4c-45af-bbb5-6318274c7a3b
+        createdByUserId: 00000000-0000-4000-8000-000000000001
+        title: Learn Azul
+        slug: learn-azul
+        description: A beginner-friendly game night.
+        format: IN_PERSON
+        status: PUBLISHED
+        visibility: PUBLIC
+        startsAt: '2030-08-03T18:00:00.000Z'
+        endsAt: '2030-08-03T21:00:00.000Z'
+        timezone: Europe/Moscow
+        capacity: 12
+        createdAt: '2030-08-01T12:00:00.000Z'
+        updatedAt: '2030-08-01T12:00:00.000Z'
+    CreateEvent:
+      type: object
+      additionalProperties: false
+      required: [title, slug, startsAt, endsAt, timezone, capacity]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 150 }
+        slug: { type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }
+        description: { type: string, maxLength: 10000, default: '' }
+        format: { type: string, enum: [IN_PERSON, ONLINE, HYBRID], default: IN_PERSON }
+        visibility: { type: string, enum: [PUBLIC, COMMUNITY_ONLY, INVITE_ONLY], default: PUBLIC }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        timezone: { type: string, example: Europe/Moscow }
+        capacity: { type: integer, minimum: 1 }
+      example:
+        title: Learn Azul
+        slug: learn-azul
+        description: A beginner-friendly game night.
+        format: IN_PERSON
+        visibility: PUBLIC
+        startsAt: '2030-08-03T18:00:00.000Z'
+        endsAt: '2030-08-03T21:00:00.000Z'
+        timezone: Europe/Moscow
+        capacity: 12
+    Pagination:
+      type: object
+      required: [page, limit, total]
+      properties:
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1 }
+        total: { type: integer, minimum: 0 }
+    ConfirmedOutcome:
+      type: object
+      required: [attendanceStatus, reservationId]
+      properties:
+        attendanceStatus: { const: CONFIRMED }
+        reservationId: { type: string, format: uuid }
+      example:
+        attendanceStatus: CONFIRMED
+        reservationId: 91723303-6859-45fa-a2fe-1633835f3dac
+    WaitlistedOutcome:
+      type: object
+      required: [attendanceStatus, waitlistEntryId, position]
+      properties:
+        attendanceStatus: { const: WAITLISTED }
+        waitlistEntryId: { type: string, format: uuid }
+        position: { type: integer, minimum: 1 }
+      example:
+        attendanceStatus: WAITLISTED
+        waitlistEntryId: f9c94bc2-2387-44b6-b34f-d4a440493252
+        position: 1
+    Reservation:
+      type: object
+      required: [id, status, reservedAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { const: CONFIRMED }
+        reservedAt: { type: string, format: date-time }
+      example:
+        id: 91723303-6859-45fa-a2fe-1633835f3dac
+        status: CONFIRMED
+        reservedAt: '2030-08-01T12:15:00.000Z'
+    WaitlistEntry:
+      type: object
+      required: [id, status, joinedAt, position]
+      properties:
+        id: { type: string, format: uuid }
+        status: { const: WAITING }
+        joinedAt: { type: string, format: date-time }
+        position: { type: integer, minimum: 1 }
+      example:
+        id: f9c94bc2-2387-44b6-b34f-d4a440493252
+        status: WAITING
+        joinedAt: '2030-08-01T12:16:00.000Z'
+        position: 1
+  responses:
+    Error:
+      description: Safe machine-readable error response.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

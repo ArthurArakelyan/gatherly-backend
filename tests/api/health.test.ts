@@ -8,6 +8,7 @@ const app = createApp({
   corsOrigin: 'http://localhost:5173',
   enableHttpLogging: false,
   logger: pino({ enabled: false }),
+  checkReadiness: () => Promise.resolve(true),
   communitiesRouter: Router(),
   membershipsRouter: Router(),
   eventsRouter: Router(),

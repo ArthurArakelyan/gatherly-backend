@@ -16,9 +16,5 @@ export const createPool = (environment: Environment): pg.Pool => {
     idleTimeoutMillis: 30_000,
   });
 
-  pool.on('error', (error) => {
-    // Log the error; do not silently ignore an idle-client failure.
-  });
-
   return pool;
 };

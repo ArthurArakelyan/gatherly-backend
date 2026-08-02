@@ -1,0 +1,28 @@
+live:
+  get:
+    tags: [Health]
+    summary: Check whether the HTTP process is alive
+    responses:
+      '200':
+        description: Process is alive.
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/Health' }
+            example: { status: ok }
+ready:
+  get:
+    tags: [Health]
+    summary: Check whether PostgreSQL is reachable
+    responses:
+      '200':
+        description: PostgreSQL is reachable.
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/Health' }
+            example: { status: ready }
+      '503':
+        description: PostgreSQL is unavailable.
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/Health' }
+            example: { status: not_ready }

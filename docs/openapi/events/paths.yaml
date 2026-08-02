@@ -1,0 +1,75 @@
+create:
+  post:
+    tags: [Events]
+    summary: Create an event in a community
+    description: Requires an active OWNER, ORGANIZER, or MODERATOR membership.
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/CommunityId'
+      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../../openapi.yaml#/components/schemas/CreateEvent' }
+    responses:
+      '201':
+        description: Event created.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data: { $ref: '../../openapi.yaml#/components/schemas/Event' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '403': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '404': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '409': { $ref: '../../openapi.yaml#/components/responses/Error' }
+collection:
+  get:
+    tags: [Events]
+    summary: List public published, cancelled, or completed events
+    parameters:
+      - { name: communityId, in: query, schema: { type: string, format: uuid } }
+      - {
+          name: status,
+          in: query,
+          schema: { type: string, enum: [PUBLISHED, CANCELLED, COMPLETED] },
+        }
+      - { name: startsAfter, in: query, schema: { type: string, format: date-time } }
+      - { name: startsBefore, in: query, schema: { type: string, format: date-time } }
+      - $ref: '../../openapi.yaml#/components/parameters/Page'
+      - $ref: '../../openapi.yaml#/components/parameters/Limit'
+    responses:
+      '200':
+        description: Paginated public events.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data, pagination]
+              properties:
+                data:
+                  type: array
+                  items: { $ref: '../../openapi.yaml#/components/schemas/Event' }
+                pagination: { $ref: '../../openapi.yaml#/components/schemas/Pagination' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+item:
+  get:
+    tags: [Events]
+    summary: Get a public event
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/EventId'
+    responses:
+      '200':
+        description: Event returned.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data: { $ref: '../../openapi.yaml#/components/schemas/Event' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '404': { $ref: '../../openapi.yaml#/components/responses/Error' }

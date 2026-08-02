@@ -1,0 +1,26 @@
+join:
+  post:
+    tags: [Memberships]
+    summary: Join an open community
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/CommunityId'
+      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
+    responses:
+      '201': { description: Membership created. }
+      '200': { description: Caller was already an active member. }
+      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '403': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '404': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '409': { $ref: '../../openapi.yaml#/components/responses/Error' }
+leave:
+  post:
+    tags: [Memberships]
+    summary: Leave a community while retaining membership history
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/CommunityId'
+      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
+    responses:
+      '204': { description: Membership transitioned to LEFT. }
+      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '404': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '409': { $ref: '../../openapi.yaml#/components/responses/Error' }

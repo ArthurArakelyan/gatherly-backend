@@ -153,7 +153,7 @@ export class EventsRepository {
     const values: unknown[] = [];
     const add = (columnAndOperator: string, value: unknown): void => {
       values.push(value);
-      clauses.push(`${columnAndOperator} $${values.length}`);
+      clauses.push(`${columnAndOperator} $${String(values.length)}`);
     };
 
     if (filters.communityId !== null) add('e.community_id =', filters.communityId);
@@ -164,6 +164,8 @@ export class EventsRepository {
     const where = clauses.join(' AND ');
     const filterValues = [...values];
     values.push(filters.limit, (filters.page - 1) * filters.limit);
+    const limitParameter = String(values.length - 1);
+    const offsetParameter = String(values.length);
 
     const [events, count] = await Promise.all([
       this.pool.query<EventRow>(
@@ -172,7 +174,7 @@ export class EventsRepository {
          JOIN communities AS c ON c.id = e.community_id
          WHERE ${where}
          ORDER BY e.starts_at ASC, e.id ASC
-         LIMIT $${values.length - 1} OFFSET $${values.length}`,
+         LIMIT $${limitParameter} OFFSET $${offsetParameter}`,
         values,
       ),
       this.pool.query<{ total: number }>(
