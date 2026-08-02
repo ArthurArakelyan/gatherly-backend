@@ -28,7 +28,7 @@ Start the current foundation server in watch mode:
 yarn dev
 ```
 
-It currently uses `node:http`, intentionally matching Phase 0, and exposes `GET /health`. Express is installed for the next phase but has not replaced the foundation exercise yet.
+It currently uses `node:http`, intentionally matching Phase 0, and exposes `GET /health`. Express is installed for Phase 2 but has not replaced the foundation exercise yet.
 
 ### Available scripts
 
@@ -442,7 +442,7 @@ The defining database exercise is two concurrent users attempting to reserve the
 
 ### 0. Node.js and TypeScript foundations
 
-Before Express, build:
+This foundation may be scaffolded or completed by AI; it is no longer a required user-led learning checkpoint. The current repository already contains the native HTTP server. Optional foundation exercises are:
 
 1. A `node:http` server.
 2. A CLI that reads events from JSON.
@@ -450,13 +450,30 @@ Before Express, build:
 
 Use ES modules (`"type": "module"`), strict TypeScript, and `NodeNext` resolution. Learn the event loop, promises, streams, buffers, signals, environment configuration, error handling, graceful shutdown, and `AbortController`.
 
-### 1. Express and in-memory API
+### 1. Docker, Docker Compose, and PostgreSQL foundation
 
-Implement communities, events, reservations, cancellation, pagination, filtering, request IDs, validation, centralized errors, OpenAPI, and automated HTTP tests using maps/arrays. Add Morgan to understand request middleware.
+Containerize the current Node application and run it with PostgreSQL through Docker Compose. Add a Dockerfile, `.dockerignore`, Compose configuration, environment variables, an isolated network, a named PostgreSQL volume, and health checks for both services.
 
-### 2. PostgreSQL with raw SQL
+Follow the detailed, build-it-yourself guide in [`PHASE_1_DOCKER_HANDBOOK.md`](./PHASE_1_DOCKER_HANDBOOK.md).
 
-Run PostgreSQL in Docker Compose while Node runs locally. Use `pg`, manual tables, parameterized queries, joins, transactions, isolation, row locks, aggregation, constraints, normalization, timestamps, and pagination.
+At this stage, prove that:
+
+- `docker compose up --build` starts the Node and PostgreSQL services.
+- The Node health endpoint is reachable from the host.
+- The application can resolve PostgreSQL by its Compose service name.
+- PostgreSQL data survives an ordinary container restart through its named volume.
+- Health checks and dependency conditions behave predictably.
+- Ctrl+C or `docker compose stop` allows the Node process to shut down gracefully.
+
+Do not introduce application tables, Prisma, Nginx, or production deployment machinery yet.
+
+### 2. Express API with PostgreSQL and raw SQL
+
+Replace the manual `node:http` request routing with Express and build communities, events, reservations, cancellation, waitlists, pagination, filtering, request IDs, validation, centralized errors, OpenAPI, and automated HTTP tests. Repositories use `pg` and PostgreSQL from the beginning; there is no in-memory persistence phase.
+
+Follow the detailed, build-it-yourself guide in [`PHASE_2_EXPRESS_POSTGRES_HANDBOOK.md`](./PHASE_2_EXPRESS_POSTGRES_HANDBOOK.md).
+
+Create tables and migrations manually and learn parameterized queries, joins, transactions, isolation, row locks, aggregation, constraints, normalization, timestamps, and pagination. Add Morgan to understand request middleware.
 
 Directly implement the core invariants in SQL, especially concurrent final-place reservation and transactional waitlist promotion.
 
@@ -472,9 +489,9 @@ Add only username/password sign-up and sign-in plus the small token/session mech
 
 Finish accounts, profiles, communities, membership, events, reservations, waitlists, announcements, in-app notifications, PostgreSQL search, and a mobile-friendly frontend. Deploy to a small real group and collect feedback before adding advanced infrastructure.
 
-### 6. Docker and serious tests
+### 6. Container hardening and serious tests
 
-Dockerize the Node app and PostgreSQL with multi-stage builds, health checks, non-root users, volumes, networks, secrets, graceful shutdown, and safe migration handling.
+Improve the Phase 1 containers with production-oriented multi-stage builds, tighter non-root execution, secret handling, image caching, graceful draining, and safe migration handling.
 
 Use unit, integration, API, and end-to-end tests. Test concurrency, repeated idempotency keys, mid-transaction failure, dependency outages, duplicate messages, permission loss during a socket, and shutdown during active requests.
 
@@ -549,24 +566,23 @@ Useful later topics include HTTP/TCP/DNS/TLS, CORS/CSRF/XSS defenses, API versio
 
 ```text
 1. Node and TypeScript foundations
-2. Express in-memory REST API
-3. PostgreSQL and raw SQL
+2. Dockerize Node and run PostgreSQL with Docker Compose
+3. Express REST API backed by PostgreSQL and raw SQL
 4. Prisma
 5. Minimal authentication and authorization
 6. Communities and events
 7. Reservations and waitlists
 8. First deployment and real users
-9. Automated testing
-10. Docker improvements
-11. Database indexes
-12. Redis
-13. SSE
-14. WebSockets and chat
-15. Elasticsearch
-16. Kafka and transactional outbox
-17. Logging and tracing
-18. CI/CD and production hardening
-19. Performance and failure testing
+9. Automated testing and container hardening
+10. Database indexes
+11. Redis
+12. SSE
+13. WebSockets and chat
+14. Elasticsearch
+15. Kafka and transactional outbox
+16. Logging and tracing
+17. CI/CD and production hardening
+18. Performance and failure testing
 ```
 
 Real users intentionally appear before most advanced infrastructure. Their behavior should determine which later capabilities deserve investment.

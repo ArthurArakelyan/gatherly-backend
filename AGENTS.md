@@ -112,18 +112,18 @@ When changing reservations or waitlists, include a concurrency-focused test and 
 
 Respect the progressive roadmap unless the user requests a different phase:
 
-1. Node.js/TypeScript exercises without Express.
-2. Express API backed by in-memory repositories and automated HTTP tests.
-3. PostgreSQL through `pg` and handwritten SQL.
-4. Prisma for ordinary persistence; retain raw SQL where it is clearer or safer.
-5. Minimal sign-up/sign-in authentication and thorough object-level authorization.
-6. First usable MVP and deployment to a small real group.
-7. Docker and serious behavioral testing.
+1. Phase 0: Node.js/TypeScript foundations without Express. This phase may be implemented by AI and is not a required user-led learning checkpoint.
+2. Phase 1: Dockerize the Node foundation and run it beside PostgreSQL with Docker Compose; do not design application tables yet.
+3. Phase 2: Build the Express API directly on PostgreSQL repositories using `pg`, handwritten SQL, migrations, and automated HTTP/integration tests. There is no in-memory persistence phase.
+4. Phase 3: Introduce Prisma for ordinary persistence while retaining raw SQL where it is clearer or safer.
+5. Phase 4: Minimal sign-up/sign-in authentication and thorough object-level authorization.
+6. Phase 5: First usable MVP and deployment to a small real group.
+7. Phase 6: Container hardening and serious behavioral testing.
 8. Query measurement and targeted database indexes.
 9. Redis, SSE, WebSockets, Elasticsearch, and Kafka—in that order and only with a concrete use.
 10. Observability, CI/CD, and production hardening.
 
-Do not hide a lesson the current phase is intended to teach. For example, during the raw-SQL phase, do not replace the exercise with Prisma; during the in-memory phase, do not introduce PostgreSQL.
+Do not hide a lesson the current phase is intended to teach. During Phase 1, focus on containers, service health, networking, volumes, and shutdown rather than starting the API/domain schema. During Phase 2, use `pg` and handwritten SQL rather than replacing the exercise with Prisma.
 
 ## Technology boundaries
 
