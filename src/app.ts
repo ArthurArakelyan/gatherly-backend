@@ -1,19 +1,49 @@
-import type { RequestListener } from 'node:http';
+import cors from 'cors';
+import express, { type Express, type Router } from 'express';
+import helmet from 'helmet';
+import type { Logger } from 'pino';
 
-const sendJson = (
-  response: Parameters<RequestListener>[1],
-  statusCode: number,
-  body: Readonly<Record<string, unknown>>,
-): void => {
-  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
+import { createDevelopmentHttpLogger } from './shared/logging/logger.js';
+import { requestIdMiddleware } from './shared/logging/request-id.middleware.js';
+import { notFoundHandler } from './shared/errors/not-found-handler.js';
+import { createErrorHandler } from './shared/errors/error-handler.js';
 
-export const requestListener: RequestListener = (request, response) => {
-  if (request.method === 'GET' && request.url === '/health') {
-    sendJson(response, 200, { status: 'ok' });
-    return;
+export interface AppDependencies {
+  corsOrigin: string;
+  enableHttpLogging: boolean;
+  logger: Logger;
+  communitiesRouter: Router;
+  membershipsRouter: Router;
+  eventsRouter: Router;
+  reservationsRouter: Router;
+}
+
+export const createApp = (dependencies: AppDependencies): Express => {
+  const app = express();
+
+  app.disable('x-powered-by');
+  app.use(helmet());
+  app.use(cors({ origin: dependencies.corsOrigin }));
+  app.use(requestIdMiddleware);
+
+  if (dependencies.enableHttpLogging) {
+    app.use(createDevelopmentHttpLogger());
   }
 
-  sendJson(response, 404, { error: 'Not Found' });
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+
+  app.get('/health/live', (_request, response) => {
+    response.status(200).json({ status: 'ok' });
+  });
+
+  app.use('/api/communities', dependencies.communitiesRouter);
+  app.use('/api/communities', dependencies.membershipsRouter);
+  app.use('/api', dependencies.eventsRouter);
+  app.use('/api', dependencies.reservationsRouter);
+
+  app.use(notFoundHandler);
+  app.use(createErrorHandler(dependencies.logger));
+
+  return app;
 };

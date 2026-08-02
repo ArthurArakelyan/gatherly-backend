@@ -1,0 +1,18 @@
+services:
+  app:
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+      # Docker Desktop bind mounts can update file contents without forwarding
+      # filesystem events to Linux containers. Polling keeps tsx watch reliable.
+      CHOKIDAR_USEPOLLING: 'true'
+      CHOKIDAR_INTERVAL: '500'
+    command: yarn dev
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./db:/app/db:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+      - ./tsconfig.build.json:/app/tsconfig.build.json:ro
+      - ./vitest.config.ts:/app/vitest.config.ts:ro

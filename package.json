@@ -23,7 +23,10 @@
     "test:coverage": "vitest run --coverage",
     "test:unit": "vitest run tests/unit --passWithNoTests",
     "test:api": "vitest run tests/api",
-    "test:integration": "vitest run tests/integration --passWithNoTests"
+    "test:integration": "vitest run tests/integration --passWithNoTests",
+    "db:migrate": "tsx src/infrastructure/postgres/migrate.ts",
+    "db:migrate:prod": "node dist/infrastructure/postgres/migrate.js",
+    "db:seed": "tsx src/infrastructure/postgres/seed.ts"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.4.3",

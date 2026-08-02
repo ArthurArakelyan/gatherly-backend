@@ -4,6 +4,176 @@ Gatherly is a learning-focused backend for local hobby communities and small eve
 
 The project is deliberately a **modular monolith**. Its purpose is to learn backend engineering through one coherent product, not to imitate a production startup or justify unnecessary infrastructure.
 
+## Docker quick reference
+
+Run these commands from the repository root.
+
+### Development stack
+
+Always include both Compose files for development. The override bind-mounts the
+source and runs `tsx watch`, so TypeScript changes restart the application.
+
+```powershell
+# Validate the merged configuration
+docker compose -f compose.yaml -f compose.dev.yaml config --quiet
+
+# Start in the foreground and build changed images
+docker compose -f compose.yaml -f compose.dev.yaml up --build
+
+# Start in the background
+docker compose -f compose.yaml -f compose.dev.yaml up --detach --build
+
+# Show container status
+docker compose -f compose.yaml -f compose.dev.yaml ps
+
+# Follow all logs, or only application/PostgreSQL logs
+docker compose -f compose.yaml -f compose.dev.yaml logs --follow
+docker compose -f compose.yaml -f compose.dev.yaml logs --follow app
+docker compose -f compose.yaml -f compose.dev.yaml logs --follow postgres
+
+# Restart one service
+docker compose -f compose.yaml -f compose.dev.yaml restart app
+docker compose -f compose.yaml -f compose.dev.yaml restart postgres
+
+# Stop containers without removing them, then start them again
+docker compose -f compose.yaml -f compose.dev.yaml stop
+docker compose -f compose.yaml -f compose.dev.yaml start
+
+# Stop and remove containers and the network; keep PostgreSQL data
+docker compose -f compose.yaml -f compose.dev.yaml down
+```
+
+Rebuild the development image after changing `package.json`, `yarn.lock`, or the
+Dockerfile. Ordinary changes below `src/` do not require a rebuild.
+
+### Production-style local stack
+
+The base Compose file builds the immutable runtime image, sets
+`NODE_ENV=production`, and runs compiled JavaScript. This is useful for checking
+the production image locally; it is not a complete production deployment.
+
+```powershell
+# Validate and build the runtime image
+docker compose config --quiet
+docker compose build app
+
+# Start in the foreground or background
+docker compose up --build
+docker compose up --detach --build
+
+# Inspect status and logs
+docker compose ps
+docker compose logs --follow app
+docker compose logs --follow postgres
+
+# Rebuild and recreate only the application after a source change
+docker compose up --detach --build app
+
+# Stop without removing, or remove while retaining database data
+docker compose stop
+docker compose down
+```
+
+Unlike the development stack, the production-style image does not mount
+`src/`. Rebuild it to include source changes.
+
+### PostgreSQL and database commands
+
+The commands below use the example database and user names from `.env.example`.
+Replace `gatherly` if your `.env` uses different values.
+
+```powershell
+# Check PostgreSQL readiness
+docker compose exec postgres pg_isready -U gatherly -d gatherly
+
+# Open an interactive psql session (exit with \q)
+docker compose exec postgres psql -U gatherly -d gatherly
+
+# List tables and inspect migration history
+docker compose exec postgres psql -U gatherly -d gatherly -c "\dt"
+docker compose exec postgres psql -U gatherly -d gatherly -c "TABLE schema_migrations;"
+
+# Run migrations and the development seed in the running development app
+docker compose -f compose.yaml -f compose.dev.yaml exec app yarn db:migrate
+docker compose -f compose.yaml -f compose.dev.yaml exec app yarn db:seed
+
+# Run migrations as a one-off production-image command
+docker compose run --rm app yarn db:migrate:prod
+
+# Inspect the deterministic development users
+docker compose exec postgres psql -U gatherly -d gatherly -c "TABLE users;"
+
+# Create a SQL backup on the host
+docker compose exec -T postgres pg_dump -U gatherly -d gatherly > gatherly-backup.sql
+```
+
+### Cleanup and disk-space recovery
+
+First inspect what Docker is using:
+
+```powershell
+docker compose -f compose.yaml -f compose.dev.yaml ps --all
+docker system df -v
+```
+
+For the development environment, this removes Gatherly's containers, network,
+locally built application image, and PostgreSQL volume:
+
+```powershell
+docker compose -f compose.yaml -f compose.dev.yaml down --volumes --remove-orphans --rmi local
+```
+
+This is a **complete, destructive local reset**. The source checkout remains,
+but all data in `gatherly-backend_postgres_data` is deleted. Recreate an empty
+development environment with:
+
+```powershell
+docker compose -f compose.yaml -f compose.dev.yaml up --detach --build
+docker compose -f compose.yaml -f compose.dev.yaml exec app yarn db:migrate
+docker compose -f compose.yaml -f compose.dev.yaml exec app yarn db:seed
+```
+
+For the production-style Compose environment, normal cleanup should retain the
+database volume:
+
+```powershell
+# Remove containers, network, and the locally built app image; retain DB data
+docker compose down --remove-orphans --rmi local
+```
+
+Only when permanently decommissioning that environment, and only after creating
+and verifying a backup, delete its database volume too:
+
+```powershell
+# DESTRUCTIVE: permanently deletes the Compose-managed PostgreSQL data
+docker compose down --volumes --remove-orphans --rmi local
+```
+
+These commands do not remove shared base images such as
+`postgres:17-bookworm`, because another project may use them. If no container
+uses that image and you deliberately want to remove it, run:
+
+```powershell
+docker image rm postgres:17-bookworm
+```
+
+Docker build cache is engine-wide rather than reliably project-scoped. Inspect
+it first, then optionally remove unused cache from all projects:
+
+```powershell
+docker builder prune
+
+# More aggressive: remove all unused build cache, including reusable old layers
+docker builder prune --all
+```
+
+Cache pruning never deletes the Gatherly source or PostgreSQL volume, but future
+builds may need to download and rebuild dependencies again. Avoid
+`docker system prune --all --volumes` for project cleanup: it affects unrelated
+Docker projects and can delete their unused volumes. Docker Desktop's virtual
+disk may remain physically large after cleanup even though Docker can reuse the
+freed internal space.
+
 ## Local development setup
 
 Requirements:
@@ -28,6 +198,11 @@ Start the current foundation server in watch mode:
 yarn dev
 ```
 
+For Docker development, use the quick-reference commands above. The development
+override bind-mounts the source and enables polling so file watching works
+reliably through Docker Desktop. Plain `docker compose up --build` runs the
+immutable production-style image, where source edits require rebuilding.
+
 It currently uses `node:http`, intentionally matching Phase 0, and exposes `GET /health`. Express is installed for Phase 2 but has not replaced the foundation exercise yet.
 
 ### Available scripts
@@ -47,6 +222,9 @@ yarn test:coverage     Generate text, HTML, and LCOV coverage
 yarn test:unit         Run tests/unit
 yarn test:api          Run tests/api
 yarn test:integration  Run tests/integration
+yarn db:migrate        Apply pending migrations from TypeScript
+yarn db:migrate:prod   Apply pending migrations from compiled JavaScript
+yarn db:seed           Insert repeatable development data
 ```
 
 ### Installed package groups
