@@ -675,6 +675,9 @@ Move ordinary persistence behind repositories using Prisma migrations, relations
 
 Add only username/password sign-up and sign-in plus the small token/session mechanism required by protected routes. Then focus on platform/community roles, ownership, bans, and object-level authorization. Email verification, magic links, password recovery, refresh-token rotation, OAuth/OIDC, and social login are intentionally outside this project’s learning scope.
 
+Follow the detailed, build-it-yourself guide in
+[`PHASE_4_MINIMAL_AUTH_HANDBOOK.md`](./PHASE_4_MINIMAL_AUTH_HANDBOOK.md).
+
 ### 5. First usable MVP and deployment
 
 Finish accounts, profiles, communities, membership, events, reservations, waitlists, announcements, in-app notifications, PostgreSQL search, and a mobile-friendly frontend. Deploy to a small real group and collect feedback before adding advanced infrastructure.
