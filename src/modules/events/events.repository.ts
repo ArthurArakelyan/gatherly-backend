@@ -1,4 +1,4 @@
-import pg, { type Pool } from 'pg';
+import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
 
 import { AppError } from '../../shared/errors/app-error.js';
 import type {
@@ -11,79 +11,58 @@ import type {
   EventVisibility,
 } from './events.types.js';
 
-interface EventRow {
-  id: string;
-  community_id: string;
-  created_by_user_id: string;
-  title: string;
-  slug: string;
-  description: string;
-  format: EventFormat;
-  status: string;
-  visibility: EventVisibility;
-  starts_at: Date;
-  ends_at: Date;
-  timezone: string;
-  capacity: number;
-  created_at: Date;
-  updated_at: Date;
-}
+const eventSelection = {
+  id: true,
+  communityId: true,
+  createdByUserId: true,
+  title: true,
+  slug: true,
+  description: true,
+  format: true,
+  status: true,
+  visibility: true,
+  startsAt: true,
+  endsAt: true,
+  timezone: true,
+  capacity: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.EventSelect;
 
-interface AuthorizationRow {
-  community_status: string;
-  membership_status: string | null;
-  role: string | null;
-}
+type EventRecord = Prisma.EventGetPayload<{ select: typeof eventSelection }>;
 
-const eventSelection = `
-  e.id, e.community_id, e.created_by_user_id, e.title, e.slug,
-  e.description, e.format, e.status, e.visibility, e.starts_at,
-  e.ends_at, e.timezone, e.capacity, e.created_at, e.updated_at
-`;
-
-const mapEvent = (row: EventRow): Event => ({
-  id: row.id,
-  communityId: row.community_id,
-  createdByUserId: row.created_by_user_id,
-  title: row.title,
-  slug: row.slug,
-  description: row.description,
-  format: row.format,
-  status: row.status,
-  visibility: row.visibility,
-  startsAt: row.starts_at,
-  endsAt: row.ends_at,
-  timezone: row.timezone,
-  capacity: row.capacity,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
+const mapEvent = (record: EventRecord): Event => ({
+  ...record,
+  format: record.format as EventFormat,
+  visibility: record.visibility as EventVisibility,
 });
 
 export class EventsRepository {
-  public constructor(private readonly pool: Pool) {}
+  public constructor(private readonly prisma: PrismaClient) {}
 
   public async findCreationAuthorization(
     communityId: string,
     userId: string,
   ): Promise<EventCreationAuthorization | null> {
-    const result = await this.pool.query<AuthorizationRow>(
-      `SELECT c.status AS community_status,
-              m.status AS membership_status,
-              m.role
-       FROM communities AS c
-       LEFT JOIN community_memberships AS m
-         ON m.community_id = c.id AND m.user_id = $2
-       WHERE c.id = $1`,
-      [communityId, userId],
-    );
-    const row = result.rows[0];
-    return row === undefined
-      ? null
-      : {
-          communityStatus: row.community_status,
-          membershipStatus: row.membership_status,
-          role: row.role,
-        };
+    const community = await this.prisma.community.findUnique({
+      where: { id: communityId },
+      select: {
+        status: true,
+        memberships: {
+          where: { userId },
+          select: { status: true, role: true },
+          take: 1,
+        },
+      },
+    });
+
+    if (community === null) return null;
+    const membership = community.memberships[0];
+    return {
+      communityStatus: community.status,
+      membershipStatus: membership?.status ?? null,
+      role: membership?.role ?? null,
+    };
   }
 
   public async create(
@@ -92,38 +71,25 @@ export class EventsRepository {
     input: CreateEventInput,
   ): Promise<Event> {
     try {
-      const result = await this.pool.query<EventRow>(
-        `INSERT INTO events
-           (community_id, created_by_user_id, title, slug, description,
-            format, visibility, starts_at, ends_at, timezone, capacity)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         RETURNING
-           id, community_id, created_by_user_id, title, slug, description,
-           format, status, visibility, starts_at, ends_at, timezone,
-           capacity, created_at, updated_at`,
-        [
+      const record = await this.prisma.event.create({
+        data: {
           communityId,
-          userId,
-          input.title,
-          input.slug,
-          input.description,
-          input.format,
-          input.visibility,
-          input.startsAt,
-          input.endsAt,
-          input.timezone,
-          input.capacity,
-        ],
-      );
-      const row = result.rows[0];
-      if (row === undefined) throw new Error('Event insert returned no row');
-      return mapEvent(row);
+          createdByUserId: userId,
+          title: input.title,
+          slug: input.slug,
+          description: input.description,
+          format: input.format,
+          visibility: input.visibility,
+          startsAt: input.startsAt,
+          endsAt: input.endsAt,
+          timezone: input.timezone,
+          capacity: input.capacity,
+        },
+        select: eventSelection,
+      });
+      return mapEvent(record);
     } catch (error) {
-      if (
-        error instanceof pg.DatabaseError &&
-        error.code === '23505' &&
-        error.constraint === 'events_community_slug_key'
-      ) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new AppError(409, 'EVENT_SLUG_TAKEN', 'That event slug is already used here');
       }
       throw error;
@@ -131,66 +97,51 @@ export class EventsRepository {
   }
 
   public async findPublicById(eventId: string): Promise<Event | null> {
-    const result = await this.pool.query<EventRow>(
-      `SELECT ${eventSelection}
-       FROM events AS e
-       JOIN communities AS c ON c.id = e.community_id
-       WHERE e.id = $1
-         AND e.visibility = 'PUBLIC'
-         AND e.status IN ('PUBLISHED', 'CANCELLED', 'COMPLETED')
-         AND c.status = 'ACTIVE'`,
-      [eventId],
-    );
-    return result.rows[0] === undefined ? null : mapEvent(result.rows[0]);
+    const record = await this.prisma.event.findFirst({
+      where: {
+        id: eventId,
+        visibility: 'PUBLIC',
+        status: { in: ['PUBLISHED', 'CANCELLED', 'COMPLETED'] },
+        community: { status: 'ACTIVE' },
+      },
+      select: eventSelection,
+    });
+    return record === null ? null : mapEvent(record);
   }
 
   public async listPublic(filters: EventFilters): Promise<EventPage> {
-    const clauses = [
-      `e.visibility = 'PUBLIC'`,
-      `e.status IN ('PUBLISHED', 'CANCELLED', 'COMPLETED')`,
-      `c.status = 'ACTIVE'`,
-    ];
-    const values: unknown[] = [];
-    const add = (columnAndOperator: string, value: unknown): void => {
-      values.push(value);
-      clauses.push(`${columnAndOperator} $${String(values.length)}`);
+    const where: Prisma.EventWhereInput = {
+      visibility: 'PUBLIC',
+      status: filters.status ?? { in: ['PUBLISHED', 'CANCELLED', 'COMPLETED'] },
+      community: { status: 'ACTIVE' },
+      ...(filters.communityId === null ? {} : { communityId: filters.communityId }),
+      ...(filters.startsAfter === null ? {} : { startsAt: { gte: filters.startsAfter } }),
+      ...(filters.startsBefore === null
+        ? {}
+        : {
+            startsAt: {
+              ...(filters.startsAfter === null ? {} : { gte: filters.startsAfter }),
+              lt: filters.startsBefore,
+            },
+          }),
     };
 
-    if (filters.communityId !== null) add('e.community_id =', filters.communityId);
-    if (filters.status !== null) add('e.status =', filters.status);
-    if (filters.startsAfter !== null) add('e.starts_at >=', filters.startsAfter);
-    if (filters.startsBefore !== null) add('e.starts_at <', filters.startsBefore);
-
-    const where = clauses.join(' AND ');
-    const filterValues = [...values];
-    values.push(filters.limit, (filters.page - 1) * filters.limit);
-    const limitParameter = String(values.length - 1);
-    const offsetParameter = String(values.length);
-
-    const [events, count] = await Promise.all([
-      this.pool.query<EventRow>(
-        `SELECT ${eventSelection}
-         FROM events AS e
-         JOIN communities AS c ON c.id = e.community_id
-         WHERE ${where}
-         ORDER BY e.starts_at ASC, e.id ASC
-         LIMIT $${limitParameter} OFFSET $${offsetParameter}`,
-        values,
-      ),
-      this.pool.query<{ total: number }>(
-        `SELECT count(*)::integer AS total
-         FROM events AS e
-         JOIN communities AS c ON c.id = e.community_id
-         WHERE ${where}`,
-        filterValues,
-      ),
+    const [records, total] = await this.prisma.$transaction([
+      this.prisma.event.findMany({
+        where,
+        select: eventSelection,
+        orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
+        skip: (filters.page - 1) * filters.limit,
+        take: filters.limit,
+      }),
+      this.prisma.event.count({ where }),
     ]);
 
     return {
-      items: events.rows.map(mapEvent),
+      items: records.map(mapEvent),
       page: filters.page,
       limit: filters.limit,
-      total: count.rows[0]?.total ?? 0,
+      total,
     };
   }
 }

@@ -4,28 +4,35 @@ import path from 'node:path';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pg, { type Pool } from 'pg';
 
-import { runMigrations } from '../../src/infrastructure/postgres/migration-runner.js';
+import type { PrismaClient } from '../../src/generated/prisma/client.js';
+import { createPrismaClient } from '../../src/infrastructure/prisma/client.js';
+import { deployPrismaMigrations } from './prisma-migrate.js';
 
 export interface PostgresHarness {
+  connectionString: string;
   pool: Pool;
+  prisma: PrismaClient;
   reset: () => Promise<void>;
   seed: () => Promise<void>;
   stop: () => Promise<void>;
 }
 
-const migrationsDirectory = path.resolve(process.cwd(), 'db/migrations');
 const developmentSeedFile = path.resolve(process.cwd(), 'db/seeds/development.sql');
 
 export const startPostgresHarness = async (): Promise<PostgresHarness> => {
   const container: StartedPostgreSqlContainer = await new PostgreSqlContainer(
     'postgres:17-bookworm',
   ).start();
-  const pool = new pg.Pool({ connectionString: container.getConnectionUri(), max: 10 });
+  const connectionString = container.getConnectionUri();
+  const pool = new pg.Pool({ connectionString, max: 10 });
 
-  await runMigrations(pool, migrationsDirectory);
+  await deployPrismaMigrations(connectionString);
+  const prisma = createPrismaClient({ DATABASE_URL: connectionString, PRISMA_POOL_MAX: 5 });
 
   return {
+    connectionString,
     pool,
+    prisma,
     reset: async () => {
       await pool.query(`
         TRUNCATE TABLE
@@ -45,7 +52,7 @@ export const startPostgresHarness = async (): Promise<PostgresHarness> => {
       await pool.query(sql);
     },
     stop: async () => {
-      await pool.end();
+      await Promise.all([prisma.$disconnect(), pool.end()]);
       await container.stop();
     },
   };

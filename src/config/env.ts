@@ -8,7 +8,9 @@ const environmentSchema = z.object({
   PGDATABASE: z.string().min(1),
   PGUSER: z.string().min(1),
   PGPASSWORD: z.string().min(1),
-  PGPOOL_MAX: z.coerce.number().int().min(1).max(50).default(10),
+  PGPOOL_MAX: z.coerce.number().int().min(1).max(50).default(5),
+  DATABASE_URL: z.url(),
+  PRISMA_POOL_MAX: z.coerce.number().int().min(1).max(50).default(5),
   CORS_ORIGIN: z.url().default('http://localhost:5173'),
 });
 

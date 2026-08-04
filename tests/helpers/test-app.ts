@@ -3,6 +3,7 @@ import pino from 'pino';
 import type { Pool } from 'pg';
 
 import { createApp } from '../../src/app.js';
+import type { PrismaClient } from '../../src/generated/prisma/client.js';
 import { CommunitiesController } from '../../src/modules/communities/communities.controller.js';
 import { CommunitiesRepository } from '../../src/modules/communities/communities.repository.js';
 import { createCommunitiesRouter } from '../../src/modules/communities/communities.routes.js';
@@ -20,15 +21,20 @@ import { ReservationsRepository } from '../../src/modules/reservations/reservati
 import { createReservationsRouter } from '../../src/modules/reservations/reservations.routes.js';
 import { ReservationsService } from '../../src/modules/reservations/reservations.service.js';
 
-export const createTestApp = (pool: Pool): Express => {
+interface TestDatabase {
+  pool: Pool;
+  prisma: PrismaClient;
+}
+
+export const createTestApp = ({ pool, prisma }: TestDatabase): Express => {
   const communitiesRouter = createCommunitiesRouter(
-    new CommunitiesController(new CommunitiesService(new CommunitiesRepository(pool))),
+    new CommunitiesController(new CommunitiesService(new CommunitiesRepository(prisma))),
   );
   const membershipsRouter = createMembershipsRouter(
-    new MembershipsController(new MembershipsService(new MembershipsRepository(pool))),
+    new MembershipsController(new MembershipsService(new MembershipsRepository(prisma))),
   );
   const eventsRouter = createEventsRouter(
-    new EventsController(new EventsService(new EventsRepository(pool))),
+    new EventsController(new EventsService(new EventsRepository(prisma))),
   );
   const reservationsRouter = createReservationsRouter(
     new ReservationsController(new ReservationsService(new ReservationsRepository(pool))),

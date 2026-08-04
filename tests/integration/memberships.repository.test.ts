@@ -4,13 +4,13 @@ import { MembershipsRepository } from '../../src/modules/memberships/memberships
 import { bobId, createCommunityFixture } from '../fixtures/database.js';
 import { type PostgresHarness, startPostgresHarness } from '../helpers/postgres.js';
 
-describe('MembershipsRepository with PostgreSQL', () => {
+describe('MembershipsRepository with Prisma', () => {
   let harness: PostgresHarness;
   let repository: MembershipsRepository;
 
   beforeAll(async () => {
     harness = await startPostgresHarness();
-    repository = new MembershipsRepository(harness.pool);
+    repository = new MembershipsRepository(harness.prisma);
   }, 60_000);
 
   beforeEach(async () => {

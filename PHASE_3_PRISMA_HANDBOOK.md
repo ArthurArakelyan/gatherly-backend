@@ -153,8 +153,8 @@ export const environment: Environment = parseEnvironment(process.env);
 Add these entries to `services.app.environment` in `compose.yaml`:
 
 ```yaml
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      PRISMA_POOL_MAX: ${PRISMA_POOL_MAX:-5}
+DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+PRISMA_POOL_MAX: ${PRISMA_POOL_MAX:-5}
 ```
 
 The container must use `postgres`, not the host-only `127.0.0.1` URL. Keep
@@ -195,10 +195,91 @@ src/
     client.ts
 ```
 
+Initialize `prisma/schema.prisma` with the datasource provider required by
+introspection:
+
+```prisma
+datasource db {
+  provider = "postgresql"
+}
+```
+
+Prisma 7 reads the connection URL from `prisma.config.ts`, but `db pull` still
+requires a datasource declaration in the schema. The reviewed schema in Step 6
+will replace this minimal starting point.
+
 `prisma.config.ts` configures the CLI. The application client is configured
 separately with its validated environment and driver adapter.
 
-## Step 5: Write a reviewed schema for the existing database
+## Step 5: Prepare the development container for introspection
+
+Do this before invoking any Prisma CLI command inside `app`. Otherwise the
+container cannot read `prisma.config.ts`, including its `DATABASE_URL`
+configuration. The CLI will then fail with a missing datasource URL even if
+`DATABASE_URL` is correctly set in Compose.
+
+Replace `Dockerfile` with:
+
+```dockerfile
+FROM node:24-bookworm-slim AS dependencies
+
+WORKDIR /app
+COPY package.json yarn.lock ./
+# Prisma's engine needs OpenSSL in the slim image.
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/*
+RUN yarn install --frozen-lockfile
+
+FROM dependencies AS development
+
+ENV NODE_ENV=development
+COPY tsconfig.json tsconfig.build.json vitest.config.ts prisma.config.ts ./
+COPY prisma ./prisma
+COPY src ./src
+COPY tests ./tests
+USER node
+CMD ["yarn", "dev"]
+
+FROM dependencies AS build
+
+COPY tsconfig.json tsconfig.build.json ./
+COPY src ./src
+RUN yarn build
+
+FROM node:24-bookworm-slim AS runtime
+
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile --production=true && yarn cache clean
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --chown=node:node db ./db
+USER node
+EXPOSE 3000
+CMD ["node", "dist/server.js"]
+```
+
+Add these mounts to `services.app.volumes` in `compose.dev.yaml`:
+
+```yaml
+- ./prisma:/app/prisma:ro
+- ./prisma.config.ts:/app/prisma.config.ts:ro
+```
+
+Rebuild and recreate the development application before continuing:
+
+```powershell
+docker compose -f compose.yaml -f compose.dev.yaml up --detach --build app
+```
+
+Only the dependencies and development stages change here. Do not generate the
+client or change the build/runtime stages yet: the reviewed schema and the
+`prisma:generate` package script do not exist until Steps 6 and 8. For now the
+development container only needs the Prisma CLI, configuration, schema path,
+and OpenSSL so that introspection can run.
+
+## Step 6: Write a reviewed schema for the existing database
 
 Use introspection as a measurement tool first. It rewrites `schema.prisma`, so
 commit before using it:
@@ -392,7 +473,7 @@ yarn prisma validate
 yarn prisma format
 ```
 
-## Step 6: Baseline the existing migration history safely
+## Step 7: Baseline the existing migration history safely
 
 Do **not** run `prisma migrate dev --name init` against the Phase 2 database.
 It already has every table. Create one baseline migration that can create a
@@ -432,7 +513,7 @@ yarn prisma migrate deploy
 `migrate resolve` records tables that already exist. It is unsafe on an empty
 database; `migrate deploy` executes the baseline there.
 
-## Step 7: Generate the client and add stable commands
+## Step 8: Generate the client and add stable commands
 
 Add these entries to the existing `scripts` object in `package.json`:
 
@@ -469,34 +550,48 @@ yarn build
 Prisma 7 does not automatically regenerate after `migrate dev`. Every schema
 change needs an explicit `yarn prisma:generate`.
 
-## Step 8: Make Prisma artifacts available in Docker
-
-Replace `Dockerfile` with:
+Now add client generation to the development stage in `Dockerfile`, after the
+source and Prisma files have been copied and before switching to the `node`
+user:
 
 ```dockerfile
-FROM node:24-bookworm-slim AS dependencies
-
-WORKDIR /app
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
-
-FROM dependencies AS development
-
-ENV NODE_ENV=development
-COPY tsconfig.json tsconfig.build.json vitest.config.ts prisma.config.ts ./
 COPY prisma ./prisma
 COPY src ./src
 COPY tests ./tests
-RUN yarn prisma:generate
+RUN DATABASE_URL=postgresql://unused:unused@localhost:5432/unused yarn prisma:generate
 USER node
-CMD ["yarn", "dev"]
+```
 
+Compose's `services.app.environment` values exist only when a container starts;
+they are not available to Dockerfile `RUN` instructions while the image is
+being built. Prisma loads `prisma.config.ts` during `prisma generate`, so
+`env('DATABASE_URL')` still requires a syntactically valid URL even though
+client generation does not connect to PostgreSQL. Use the deliberately fake
+build-only URL above. Never pass the real database password through Docker
+`ARG` or `ENV`: build metadata, logs, cache, or intermediate layers may retain
+it.
+
+Update the build and runtime stages now as well. In the build stage, replace:
+
+```dockerfile
+RUN yarn build
+```
+
+with:
+
+```dockerfile
+RUN DATABASE_URL=postgresql://unused:unused@localhost:5432/unused yarn build
+```
+
+The complete updated build and runtime stages are:
+
+```dockerfile
 FROM dependencies AS build
 
 COPY tsconfig.json tsconfig.build.json prisma.config.ts ./
 COPY prisma ./prisma
 COPY src ./src
-RUN yarn build
+RUN DATABASE_URL=postgresql://unused:unused@localhost:5432/unused yarn build
 
 FROM node:24-bookworm-slim AS runtime
 
@@ -513,11 +608,15 @@ EXPOSE 3000
 CMD ["node", "dist/server.js"]
 ```
 
-Add these mounts to `services.app.volumes` in `compose.dev.yaml`:
+`yarn build` also needs the fake URL because the package script starts with
+`yarn prisma:generate`. The running application still receives the real
+container-only URL from `services.app.environment` in `compose.yaml`.
 
-```yaml
-      - ./prisma:/app/prisma:ro
-      - ./prisma.config.ts:/app/prisma.config.ts:ro
+Rebuild the development image now that the reviewed schema and stable command
+both exist:
+
+```powershell
+docker compose -f compose.yaml -f compose.dev.yaml up --detach --build app
 ```
 
 The production image runs generated JavaScript from `dist/generated`. It does
@@ -707,73 +806,380 @@ one atomic commit are still the proof that capacity is correct.
 
 ## Step 12: Migrate memberships and events one vertical slice at a time
 
-For each ordinary repository:
+This step replaces two complete repositories. Do memberships first, prove it,
+then do events. Do not convert both files before checking the first one.
 
-1. Keep its public method signatures and module-owned types.
-2. Define a narrow `Prisma.<Model>Select` constant.
-3. Derive a `Prisma.<Model>GetPayload` type from that selection.
-4. Map the generated record into the existing domain type.
-5. Use `findUnique` only with a true unique key and `findFirst` for filtered
-   lookup.
-6. Use a Prisma transaction only for a genuinely atomic multi-write operation.
-7. Map known Prisma errors to existing `AppError` codes.
-8. Retain raw SQL for locking or PostgreSQL-specific operations.
+### Step 12A: Replace the membership repository
 
-This complete method is suitable for the migrated membership repository:
+Membership joining is not a single uncomplicated insert. The result depends on
+the community's current state and any existing membership, and a concurrent
+join must not create two rows. Use a serializable transaction and retry the
+serialization/unique-conflict race. PostgreSQL's unique constraint remains the
+final guard.
+
+Replace `src/modules/memberships/memberships.repository.ts` completely:
 
 ```ts
-public async createActiveMembership(communityId: string, userId: string): Promise<Membership> {
-  try {
-    const record = await this.prisma.communityMembership.create({
-      data: { communityId, userId, role: 'MEMBER', status: 'ACTIVE' },
-      select: membershipSelection,
-    });
-    return mapMembership(record);
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      throw new AppError(409, 'MEMBERSHIP_ALREADY_EXISTS', 'You already belong to this community');
+import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
+
+import type { JoinPersistenceOutcome, LeavePersistenceOutcome } from './memberships.types.js';
+
+const membershipSelection = {
+  id: true,
+  role: true,
+  status: true,
+} satisfies Prisma.CommunityMembershipSelect;
+
+const isRetryableConflict = (error: unknown): boolean =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  (error.code === 'P2034' || error.code === 'P2002');
+
+export class MembershipsRepository {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async joinOpenCommunity(
+    communityId: string,
+    userId: string,
+  ): Promise<JoinPersistenceOutcome> {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(
+          async (transaction) => {
+            const community = await transaction.community.findFirst({
+              where: { id: communityId, status: 'ACTIVE' },
+              select: { joinPolicy: true },
+            });
+
+            if (community === null) return 'COMMUNITY_NOT_FOUND';
+            if (community.joinPolicy !== 'OPEN') return 'JOIN_NOT_AVAILABLE';
+
+            const membership = await transaction.communityMembership.findUnique({
+              where: { communityId_userId: { communityId, userId } },
+              select: membershipSelection,
+            });
+
+            if (membership?.status === 'BANNED' || membership?.status === 'SUSPENDED') {
+              return 'BLOCKED';
+            }
+            if (membership?.status === 'ACTIVE') return 'ALREADY_ACTIVE';
+
+            if (membership === null) {
+              await transaction.communityMembership.create({
+                data: { communityId, userId, role: 'MEMBER', status: 'ACTIVE' },
+                select: { id: true },
+              });
+              return 'CREATED';
+            }
+
+            await transaction.communityMembership.update({
+              where: { id: membership.id },
+              data: { role: 'MEMBER', status: 'ACTIVE', joinedAt: new Date() },
+              select: { id: true },
+            });
+            return 'REACTIVATED';
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+      } catch (error) {
+        if (attempt < 3 && isRetryableConflict(error)) continue;
+        throw error;
+      }
     }
-    throw error;
+
+    throw new Error('Membership join retry loop ended unexpectedly');
+  }
+
+  public leaveCommunity(communityId: string, userId: string): Promise<LeavePersistenceOutcome> {
+    return this.leaveWithRetry(communityId, userId);
+  }
+
+  private async leaveWithRetry(
+    communityId: string,
+    userId: string,
+  ): Promise<LeavePersistenceOutcome> {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(
+          async (transaction) => {
+            const membership = await transaction.communityMembership.findUnique({
+              where: { communityId_userId: { communityId, userId } },
+              select: membershipSelection,
+            });
+
+            if (membership?.status !== 'ACTIVE') return 'NOT_ACTIVE';
+            if (membership.role === 'OWNER') return 'OWNER';
+
+            await transaction.communityMembership.update({
+              where: { id: membership.id },
+              data: { status: 'LEFT' },
+              select: { id: true },
+            });
+            return 'LEFT';
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+      } catch (error) {
+        if (attempt < 3 && isRetryableConflict(error)) continue;
+        throw error;
+      }
+    }
+
+    throw new Error('Membership leave retry loop ended unexpectedly');
   }
 }
 ```
 
-For event listing, select only data used by the endpoint instead of an
-unbounded relation `include`:
+Why this is more than `createActiveMembership`: the existing public method
+contract returns six meaningful outcomes, supports rejoining after `LEFT`, and
+must not reactivate a banned or suspended user. Replacing it with a plain
+`create` would silently delete those behaviors.
+
+In both `src/server.ts` and `tests/helpers/test-app.ts`, change only the
+membership construction from:
 
 ```ts
-const records = await this.prisma.event.findMany({
-  where: { status: 'PUBLISHED', startsAt: { gte: now } },
-  orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
-  take: limit,
-  select: {
-    id: true,
-    title: true,
-    slug: true,
-    startsAt: true,
-    endsAt: true,
-    timezone: true,
-    capacity: true,
-    community: { select: { id: true, name: true, slug: true } },
-  },
-});
+new MembershipsRepository(rawPool);
 ```
 
-Commit every repository conversion separately and rerun its unit, API, and
-integration tests. An ORM transition should not hide an unrelated regression.
+to:
+
+```ts
+new MembershipsRepository(prisma);
+```
+
+The local variable may still be named `pool` in the test helper before Step 16;
+the important point is that this repository receives the one test Prisma
+client, not a new client per request or test case.
+
+Run the membership-focused checks before continuing:
+
+```powershell
+yarn typecheck
+yarn test tests/unit/memberships.service.test.ts tests/api/memberships.api.test.ts
+yarn test tests/integration/memberships.repository.test.ts
+```
+
+Update the integration-test setup to construct and disconnect a Prisma client
+as shown in Step 16. Keep using the raw pool for fixtures and direct assertions.
+Add a concurrent-join assertion: two joins for the same user/community must
+produce one `CREATED`, one `ALREADY_ACTIVE`, and exactly one stored membership.
+
+### Step 12B: Replace the event repository
+
+Replace `src/modules/events/events.repository.ts` completely:
+
+```ts
+import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
+
+import { AppError } from '../../shared/errors/app-error.js';
+import type {
+  CreateEventInput,
+  Event,
+  EventCreationAuthorization,
+  EventFilters,
+  EventFormat,
+  EventPage,
+  EventVisibility,
+} from './events.types.js';
+
+const eventSelection = {
+  id: true,
+  communityId: true,
+  createdByUserId: true,
+  title: true,
+  slug: true,
+  description: true,
+  format: true,
+  status: true,
+  visibility: true,
+  startsAt: true,
+  endsAt: true,
+  timezone: true,
+  capacity: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.EventSelect;
+
+type EventRecord = Prisma.EventGetPayload<{ select: typeof eventSelection }>;
+
+const mapEvent = (record: EventRecord): Event => ({
+  ...record,
+  format: record.format as EventFormat,
+  visibility: record.visibility as EventVisibility,
+});
+
+export class EventsRepository {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async findCreationAuthorization(
+    communityId: string,
+    userId: string,
+  ): Promise<EventCreationAuthorization | null> {
+    const community = await this.prisma.community.findUnique({
+      where: { id: communityId },
+      select: {
+        status: true,
+        memberships: {
+          where: { userId },
+          select: { status: true, role: true },
+          take: 1,
+        },
+      },
+    });
+
+    if (community === null) return null;
+    const membership = community.memberships[0];
+    return {
+      communityStatus: community.status,
+      membershipStatus: membership?.status ?? null,
+      role: membership?.role ?? null,
+    };
+  }
+
+  public async create(
+    communityId: string,
+    userId: string,
+    input: CreateEventInput,
+  ): Promise<Event> {
+    try {
+      const record = await this.prisma.event.create({
+        data: {
+          communityId,
+          createdByUserId: userId,
+          title: input.title,
+          slug: input.slug,
+          description: input.description,
+          format: input.format,
+          visibility: input.visibility,
+          startsAt: input.startsAt,
+          endsAt: input.endsAt,
+          timezone: input.timezone,
+          capacity: input.capacity,
+        },
+        select: eventSelection,
+      });
+      return mapEvent(record);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new AppError(409, 'EVENT_SLUG_TAKEN', 'That event slug is already used here');
+      }
+      throw error;
+    }
+  }
+
+  public async findPublicById(eventId: string): Promise<Event | null> {
+    const record = await this.prisma.event.findFirst({
+      where: {
+        id: eventId,
+        visibility: 'PUBLIC',
+        status: { in: ['PUBLISHED', 'CANCELLED', 'COMPLETED'] },
+        community: { status: 'ACTIVE' },
+      },
+      select: eventSelection,
+    });
+    return record === null ? null : mapEvent(record);
+  }
+
+  public async listPublic(filters: EventFilters): Promise<EventPage> {
+    const where: Prisma.EventWhereInput = {
+      visibility: 'PUBLIC',
+      status:
+        filters.status === null ? { in: ['PUBLISHED', 'CANCELLED', 'COMPLETED'] } : filters.status,
+      community: { status: 'ACTIVE' },
+      ...(filters.communityId === null ? {} : { communityId: filters.communityId }),
+      ...(filters.startsAfter === null ? {} : { startsAt: { gte: filters.startsAfter } }),
+      ...(filters.startsBefore === null
+        ? {}
+        : {
+            startsAt: {
+              ...(filters.startsAfter === null ? {} : { gte: filters.startsAfter }),
+              lt: filters.startsBefore,
+            },
+          }),
+    };
+
+    const [records, total] = await this.prisma.$transaction([
+      this.prisma.event.findMany({
+        where,
+        select: eventSelection,
+        orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
+        skip: (filters.page - 1) * filters.limit,
+        take: filters.limit,
+      }),
+      this.prisma.event.count({ where }),
+    ]);
+
+    return {
+      items: records.map(mapEvent),
+      page: filters.page,
+      limit: filters.limit,
+      total,
+    };
+  }
+}
+```
+
+The casts in `mapEvent` bridge database strings to the narrower module-owned
+types. They are acceptable here because the Phase 2 PostgreSQL check
+constraints validate `format` and `visibility`. Do not leak the generated
+Prisma payload type into the controller or service.
+
+In `src/server.ts` and `tests/helpers/test-app.ts`, change:
+
+```ts
+new EventsRepository(rawPool);
+```
+
+to:
+
+```ts
+new EventsRepository(prisma);
+```
+
+Then run:
+
+```powershell
+yarn typecheck
+yarn test tests/unit/events.schemas.test.ts tests/unit/events.service.test.ts
+yarn test tests/api/events.api.test.ts tests/integration/events.repository.test.ts
+yarn lint
+yarn build
+```
+
+The existing integration test must still prove create plus filtered listing.
+Also retain API coverage for an inactive community, unauthorized membership,
+duplicate community-local slug, all date filters, pagination, and stable error
+codes. Commit the membership and event conversions separately.
 
 ## Step 13: Use Prisma transactions correctly
 
-Prisma has two transaction forms:
+The completed repositories now use both Prisma transaction forms. Choose the
+form from the dependency between operations, not from the number of queries.
+
+### Independent operations: array transaction
+
+Use the array form when no operation needs a value produced by another. The
+event page and its count use the same transaction snapshot but neither query
+depends on the other:
 
 ```ts
-// Independent operations.
-const [community, total] = await prisma.$transaction([
-  prisma.community.findUniqueOrThrow({ where: { id: communityId } }),
-  prisma.event.count({ where: { communityId, status: 'PUBLISHED' } }),
+const [records, total] = await this.prisma.$transaction([
+  this.prisma.event.findMany({ where, select: eventSelection }),
+  this.prisma.event.count({ where }),
 ]);
+```
 
-// Dependent writes: later work needs the generated community id.
+`Promise.all` would run both queries but would not promise one database
+transaction. Use it for unrelated health checks, not when the returned page and
+count should describe one transactional view.
+
+### Dependent operations: interactive transaction
+
+Use the callback form when a later write needs an earlier result or the use
+case must make one decision atomically. Community creation needs the generated
+community ID before it can create the owner membership:
+
+```ts
 const community = await prisma.$transaction(async (transaction) => {
   const created = await transaction.community.create({ data: communityData });
   await transaction.communityMembership.create({
@@ -783,10 +1189,27 @@ const community = await prisma.$transaction(async (transaction) => {
 });
 ```
 
-Do not make HTTP calls, perform slow computation, or wait for user input inside
-an interactive transaction. A transaction holds scarce connections and locks.
+Always use the callback's `transaction` client inside the callback. Calling
+`this.prisma.communityMembership.create(...)` there would run outside the
+transaction and could leave a community without its owner if the second write
+failed.
 
-This remains unsafe for reservation capacity even inside Prisma:
+The membership join in Step 12 additionally requests `Serializable` isolation.
+At that level PostgreSQL can reject one of two valid-looking concurrent
+transactions. `P2034` is therefore an expected retry signal, not an error to
+translate into a client-facing conflict. The retry is bounded at three
+attempts; never retry forever.
+
+### Keep transactions short
+
+Inside an interactive transaction, perform only the database reads, decisions,
+and writes required for that use case. Do not make HTTP calls, log large
+payloads, perform slow computation, or wait for user input. A transaction holds
+a scarce connection and may hold locks until it finishes.
+
+### Know what a Prisma transaction does not fix
+
+This remains unsafe for reservation capacity even when wrapped in Prisma:
 
 ```ts
 const confirmed = await transaction.reservation.count({
@@ -797,12 +1220,56 @@ if (confirmed < event.capacity) {
 }
 ```
 
-Two requests can observe the same count. Keep the Phase 2 `FOR UPDATE` event
-lock and the partial unique indexes for this invariant.
+At ordinary isolation, two requests can observe the same count and both insert.
+The Phase 2 reservation transaction instead checks out one `pg` client, locks
+the event row with `FOR UPDATE`, checks capacity, mutates the reservation or
+waitlist, writes the notification/idempotency result, and commits once. Keep
+that complete use case on `pg`.
+
+### Prove transaction behavior
+
+Do not finish this step with only a happy-path test. The repository integration
+suite must prove:
+
+1. A duplicate community slug rolls back the attempted owner membership.
+2. Two simultaneous joins create exactly one membership row.
+3. A `LEFT` membership becomes `ACTIVE` again.
+4. `BANNED` and `SUSPENDED` memberships are never reactivated.
+5. An owner cannot leave through the normal member endpoint.
+
+Run the complete database-backed suite after Step 16 wires Prisma migrations
+and clients into the Testcontainers harness:
+
+```powershell
+yarn test tests/integration
+yarn test tests/e2e
+```
 
 ## Step 14: Keep raw SQL safe and explicit
 
-When raw SQL belongs beside Prisma, use parameterized tagged templates:
+Phase 3 intentionally has two database access paths. At the end of this step,
+the ownership is explicit:
+
+| Operation                                     | Access path  | Reason                                           |
+| --------------------------------------------- | ------------ | ------------------------------------------------ |
+| Community CRUD and owner creation             | Prisma       | Ordinary relational persistence                  |
+| Membership join/leave                         | Prisma       | Serializable state transition with bounded retry |
+| Event authorization, create, detail, list     | Prisma       | Ordinary reads, filters, and CRUD                |
+| Reservation allocation                        | `pg`         | Checked-out client plus event-row lock           |
+| Cancellation and waitlist promotion           | `pg`         | Ordered locked promotion in one transaction      |
+| Idempotency claim/completion for reservations | `pg`         | Same atomic reservation transaction              |
+| PostgreSQL migrations and partial indexes     | reviewed SQL | Database-specific durable invariants             |
+
+Do not delete `src/infrastructure/postgres/pool.ts`,
+`src/shared/database/transaction.ts`, or
+`src/modules/reservations/reservations.repository.ts`. The server and test
+harness must continue to create both `rawPool` and `prisma`, and shutdown must
+close both exactly once.
+
+### Parameterize every value
+
+When a small PostgreSQL-specific query belongs beside Prisma, prefer Prisma's
+tagged template. Interpolated values become parameters:
 
 ```ts
 const result = await prisma.$queryRaw<{ id: string; title: string }[]>`
@@ -814,9 +1281,65 @@ const result = await prisma.$queryRaw<{ id: string; title: string }[]>`
 `;
 ```
 
-Never concatenate client values into SQL or use unsafe raw-query APIs to avoid
-modelling a normal query. For reservations, retain the already-tested `pg`
-transaction instead of moving it to Prisma raw SQL.
+For dynamic SQL fragments, compose trusted fragments with `Prisma.sql`; never
+turn a client value into SQL syntax:
+
+```ts
+const statusFilter =
+  statuses.length === 0 ? Prisma.empty : Prisma.sql`AND status IN (${Prisma.join(statuses)})`;
+
+interface EventTitleRow {
+  id: string;
+  title: string;
+}
+
+const events = await prisma.$queryRaw<EventTitleRow[]>(Prisma.sql`
+  SELECT id, title
+  FROM events
+  WHERE community_id = ${communityId}::uuid
+  ${statusFilter}
+  ORDER BY starts_at ASC, id ASC
+`);
+```
+
+Column names, sort directions, and SQL keywords cannot be supplied as value
+parameters. If a client chooses one, map it through a fixed allowlist first.
+Never concatenate it into the query.
+
+Avoid `$queryRawUnsafe` and `$executeRawUnsafe`. Also do not move the reservation
+repository to Prisma raw SQL merely to claim that everything uses Prisma. Its
+`withTransaction(pool, callback)` helper guarantees every locking read and
+write uses the same checked-out `pg` client; a collection of unrelated
+`prisma.$queryRaw` calls would not preserve that guarantee.
+
+### Audit the boundary
+
+Review every remaining raw query before continuing:
+
+```powershell
+rg -n "\.query\(|\$queryRaw|\$executeRaw|RawUnsafe" src
+```
+
+For each match, confirm all of the following:
+
+1. Client-controlled values are parameters, never concatenated SQL.
+2. The query is inside a repository or infrastructure module.
+3. All statements in a locking use case share one transaction client.
+4. The reason for retaining SQL is locking, atomicity, or a genuinely clearer
+   PostgreSQL-specific operation—not convenience alone.
+5. No controller, service, or domain type imports Prisma or `pg` types.
+
+Finally run the reservation concurrency and lifecycle proofs unchanged:
+
+```powershell
+yarn test tests/integration/reservations.integration.test.ts
+yarn test tests/e2e/reservation-lifecycle.e2e.test.ts
+yarn typecheck
+yarn lint
+```
+
+Step 14 is complete only when those tests still pass. Preserving the raw path
+without preserving its concurrency tests is not preserving the invariant.
 
 ## Step 15: Move the deterministic seed to Prisma
 
@@ -907,13 +1430,15 @@ with:
 await deployPrismaMigrations(container.getConnectionUri());
 ```
 
-Expose the connection string rather than reaching into `pg.Pool` internals.
-Make these exact changes in `tests/helpers/postgres.ts`:
+Expose the connection string and the harness-owned Prisma client rather than
+reaching into `pg.Pool` internals. Make these exact changes in
+`tests/helpers/postgres.ts`:
 
 ```ts
 export interface PostgresHarness {
   connectionString: string;
   pool: Pool;
+  prisma: PrismaClient;
   reset: () => Promise<void>;
   seed: () => Promise<void>;
   stop: () => Promise<void>;
@@ -927,56 +1452,50 @@ const connectionString = container.getConnectionUri();
 const pool = new pg.Pool({ connectionString, max: 10 });
 
 await deployPrismaMigrations(connectionString);
+const prisma = createPrismaClient({ DATABASE_URL: connectionString, PRISMA_POOL_MAX: 5 });
 ```
 
-Add the value to the returned harness object:
+Add both values to the returned harness object and close both clients before
+stopping the container:
 
 ```ts
 return {
   connectionString,
   pool,
-  // Keep the existing reset, seed, and stop implementations here.
+  prisma,
+  // Keep the existing reset and seed implementations here.
+  stop: async () => {
+    await Promise.all([prisma.$disconnect(), pool.end()]);
+    await container.stop();
+  },
 };
 ```
 
 Remove the now-unused `migrationsDirectory` constant and migration-runner
 import from that file.
 
-The harness may keep its `pg.Pool` for fixtures and locking tests. A test that
-proves a Prisma repository creates a separate Prisma client and disconnects it
-in `afterAll`.
+The harness keeps its `pg.Pool` for fixtures, direct authoritative assertions,
+and reservation locking tests. Ordinary repositories receive `harness.prisma`.
+The harness owns both clients, so individual suites call only `harness.stop()`
+in `afterAll`; they must not disconnect the shared Prisma client separately.
 
-Create `tests/integration/communities.prisma.repository.test.ts`:
+Update the existing `tests/integration/communities.repository.test.ts` setup:
 
 ```ts
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { parseEnvironment } from '../../src/config/env.js';
-import { createPrismaClient } from '../../src/infrastructure/prisma/client.js';
 import { CommunitiesRepository } from '../../src/modules/communities/communities.repository.js';
-import type { PrismaClient } from '../../src/generated/prisma/client.js';
+import { aliceId, bobId } from '../fixtures/database.js';
 import type { PostgresHarness } from '../helpers/postgres.js';
 import { startPostgresHarness } from '../helpers/postgres.js';
 
 describe('CommunitiesRepository with Prisma', () => {
   let harness: PostgresHarness;
-  let prisma: PrismaClient;
   let repository: CommunitiesRepository;
 
   beforeAll(async () => {
     harness = await startPostgresHarness();
-    prisma = createPrismaClient(
-      parseEnvironment({
-        NODE_ENV: 'test',
-        PGHOST: 'unused',
-        PGDATABASE: 'unused',
-        PGUSER: 'unused',
-        PGPASSWORD: 'unused',
-        DATABASE_URL: harness.connectionString,
-        CORS_ORIGIN: 'http://localhost:5173',
-      }),
-    );
-    repository = new CommunitiesRepository(prisma);
+    repository = new CommunitiesRepository(harness.prisma);
   }, 60_000);
 
   beforeEach(async () => {
@@ -985,12 +1504,11 @@ describe('CommunitiesRepository with Prisma', () => {
   });
 
   afterAll(async () => {
-    await prisma.$disconnect();
     await harness.stop();
   });
 
   it('creates the community and active owner atomically', async () => {
-    const community = await repository.createWithOwner('00000000-0000-4000-8000-000000000001', {
+    const community = await repository.createWithOwner(aliceId, {
       name: 'Prisma Chess',
       slug: 'prisma-chess',
       description: 'Repository integration test',
@@ -1007,10 +1525,10 @@ describe('CommunitiesRepository with Prisma', () => {
 
   it('keeps the existing stable unique-conflict error', async () => {
     const input = { name: 'First', slug: 'taken-slug', description: '', city: null, country: null };
-    await repository.createWithOwner('00000000-0000-4000-8000-000000000001', input);
+    await repository.createWithOwner(aliceId, input);
 
     await expect(
-      repository.createWithOwner('00000000-0000-4000-8000-000000000002', {
+      repository.createWithOwner(bobId, {
         ...input,
         name: 'Second',
       }),

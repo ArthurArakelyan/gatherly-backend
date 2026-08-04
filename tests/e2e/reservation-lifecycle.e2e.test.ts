@@ -16,7 +16,7 @@ describe('reservation lifecycle', () => {
 
   beforeAll(async () => {
     harness = await startPostgresHarness();
-    app = createTestApp(harness.pool);
+    app = createTestApp(harness);
   }, 60_000);
 
   beforeEach(async () => {

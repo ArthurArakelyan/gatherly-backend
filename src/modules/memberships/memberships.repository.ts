@@ -1,87 +1,107 @@
-import type { Pool } from 'pg';
+import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
 
-import { withTransaction } from '../../shared/database/transaction.js';
 import type { JoinPersistenceOutcome, LeavePersistenceOutcome } from './memberships.types.js';
 
-interface CommunityRow {
-  join_policy: string;
-}
+const membershipSelection = {
+  id: true,
+  role: true,
+  status: true,
+} satisfies Prisma.CommunityMembershipSelect;
 
-interface MembershipRow {
-  role: string;
-  status: string;
-}
+const isRetryableConflict = (error: unknown): boolean =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  (error.code === 'P2034' || error.code === 'P2002');
 
 export class MembershipsRepository {
-  public constructor(private readonly pool: Pool) {}
+  public constructor(private readonly prisma: PrismaClient) {}
 
-  public joinOpenCommunity(communityId: string, userId: string): Promise<JoinPersistenceOutcome> {
-    return withTransaction(this.pool, async (client) => {
-      const community = await client.query<CommunityRow>(
-        `SELECT join_policy
-         FROM communities
-         WHERE id = $1 AND status = 'ACTIVE'
-         FOR UPDATE`,
-        [communityId],
-      );
-      const communityRow = community.rows[0];
-      if (communityRow === undefined) return 'COMMUNITY_NOT_FOUND';
-      if (communityRow.join_policy !== 'OPEN') return 'JOIN_NOT_AVAILABLE';
+  public async joinOpenCommunity(
+    communityId: string,
+    userId: string,
+  ): Promise<JoinPersistenceOutcome> {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(
+          async (transaction) => {
+            const community = await transaction.community.findFirst({
+              where: { id: communityId, status: 'ACTIVE' },
+              select: { joinPolicy: true },
+            });
 
-      const existing = await client.query<MembershipRow>(
-        `SELECT role, status
-         FROM community_memberships
-         WHERE community_id = $1 AND user_id = $2
-         FOR UPDATE`,
-        [communityId, userId],
-      );
-      const membership = existing.rows[0];
+            if (community === null) return 'COMMUNITY_NOT_FOUND';
+            if (community.joinPolicy !== 'OPEN') return 'JOIN_NOT_AVAILABLE';
 
-      if (membership?.status === 'BANNED' || membership?.status === 'SUSPENDED') {
-        return 'BLOCKED';
-      }
-      if (membership?.status === 'ACTIVE') return 'ALREADY_ACTIVE';
+            const membership = await transaction.communityMembership.findUnique({
+              where: { communityId_userId: { communityId, userId } },
+              select: membershipSelection,
+            });
 
-      if (membership === undefined) {
-        await client.query(
-          `INSERT INTO community_memberships (community_id, user_id, role, status)
-           VALUES ($1, $2, 'MEMBER', 'ACTIVE')`,
-          [communityId, userId],
+            if (membership?.status === 'BANNED' || membership?.status === 'SUSPENDED') {
+              return 'BLOCKED';
+            }
+            if (membership?.status === 'ACTIVE') return 'ALREADY_ACTIVE';
+
+            if (membership === null) {
+              await transaction.communityMembership.create({
+                data: { communityId, userId, role: 'MEMBER', status: 'ACTIVE' },
+                select: { id: true },
+              });
+              return 'CREATED';
+            }
+
+            await transaction.communityMembership.update({
+              where: { id: membership.id },
+              data: { role: 'MEMBER', status: 'ACTIVE', joinedAt: new Date() },
+              select: { id: true },
+            });
+            return 'REACTIVATED';
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
-        return 'CREATED';
+      } catch (error) {
+        if (attempt < 3 && isRetryableConflict(error)) continue;
+        throw error;
       }
+    }
 
-      await client.query(
-        `UPDATE community_memberships
-         SET role = 'MEMBER', status = 'ACTIVE', joined_at = now(), updated_at = now()
-         WHERE community_id = $1 AND user_id = $2`,
-        [communityId, userId],
-      );
-      return 'REACTIVATED';
-    });
+    throw new Error('Membership join retry loop ended unexpectedly');
   }
 
   public leaveCommunity(communityId: string, userId: string): Promise<LeavePersistenceOutcome> {
-    return withTransaction(this.pool, async (client) => {
-      const existing = await client.query<MembershipRow>(
-        `SELECT role, status
-         FROM community_memberships
-         WHERE community_id = $1 AND user_id = $2
-         FOR UPDATE`,
-        [communityId, userId],
-      );
-      const membership = existing.rows[0];
+    return this.leaveWithRetry(communityId, userId);
+  }
 
-      if (membership?.status !== 'ACTIVE') return 'NOT_ACTIVE';
-      if (membership.role === 'OWNER') return 'OWNER';
+  private async leaveWithRetry(
+    communityId: string,
+    userId: string,
+  ): Promise<LeavePersistenceOutcome> {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(
+          async (transaction) => {
+            const membership = await transaction.communityMembership.findUnique({
+              where: { communityId_userId: { communityId, userId } },
+              select: membershipSelection,
+            });
 
-      await client.query(
-        `UPDATE community_memberships
-         SET status = 'LEFT', updated_at = now()
-         WHERE community_id = $1 AND user_id = $2`,
-        [communityId, userId],
-      );
-      return 'LEFT';
-    });
+            if (membership?.status !== 'ACTIVE') return 'NOT_ACTIVE';
+            if (membership.role === 'OWNER') return 'OWNER';
+
+            await transaction.communityMembership.update({
+              where: { id: membership.id },
+              data: { status: 'LEFT' },
+              select: { id: true },
+            });
+            return 'LEFT';
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+      } catch (error) {
+        if (attempt < 3 && isRetryableConflict(error)) continue;
+        throw error;
+      }
+    }
+
+    throw new Error('Membership leave retry loop ended unexpectedly');
   }
 }

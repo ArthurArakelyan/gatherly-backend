@@ -29,6 +29,8 @@ services:
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
       CORS_ORIGIN: ${CORS_ORIGIN}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PRISMA_POOL_MAX: ${PRISMA_POOL_MAX:-5}
     ports:
       - '127.0.0.1:${APP_PORT}:3000'
     depends_on:

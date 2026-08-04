@@ -4,13 +4,13 @@ import { EventsRepository } from '../../src/modules/events/events.repository.js'
 import { aliceId, createCommunityFixture } from '../fixtures/database.js';
 import { type PostgresHarness, startPostgresHarness } from '../helpers/postgres.js';
 
-describe('EventsRepository with PostgreSQL', () => {
+describe('EventsRepository with Prisma', () => {
   let harness: PostgresHarness;
   let repository: EventsRepository;
 
   beforeAll(async () => {
     harness = await startPostgresHarness();
-    repository = new EventsRepository(harness.pool);
+    repository = new EventsRepository(harness.prisma);
   }, 60_000);
 
   beforeEach(async () => {

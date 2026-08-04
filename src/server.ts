@@ -7,6 +7,7 @@ import pino from 'pino';
 import { createApp } from './app.js';
 import { environment } from './config/env.js';
 import { createPool } from './infrastructure/postgres/pool.js';
+import { createPrismaClient } from './infrastructure/prisma/client.js';
 import { CommunitiesController } from './modules/communities/communities.controller.js';
 import { CommunitiesRepository } from './modules/communities/communities.repository.js';
 import { createCommunitiesRouter } from './modules/communities/communities.routes.js';
@@ -27,20 +28,23 @@ import { ReservationsService } from './modules/reservations/reservations.service
 const logger = pino(
   environment.NODE_ENV === 'development' ? { transport: { target: 'pino-pretty' } } : {},
 );
+
 const pool = createPool(environment);
+const prisma = createPrismaClient(environment);
+
 pool.on('error', (error) => {
   logger.error({ err: error }, 'Idle PostgreSQL client failed');
 });
 
-const communitiesRepository = new CommunitiesRepository(pool);
+const communitiesRepository = new CommunitiesRepository(prisma);
 const communitiesService = new CommunitiesService(communitiesRepository);
 const communitiesRouter = createCommunitiesRouter(new CommunitiesController(communitiesService));
 
-const membershipsRepository = new MembershipsRepository(pool);
+const membershipsRepository = new MembershipsRepository(prisma);
 const membershipsService = new MembershipsService(membershipsRepository);
 const membershipsRouter = createMembershipsRouter(new MembershipsController(membershipsService));
 
-const eventsRepository = new EventsRepository(pool);
+const eventsRepository = new EventsRepository(prisma);
 const eventsService = new EventsService(eventsRepository);
 const eventsRouter = createEventsRouter(new EventsController(eventsService));
 
@@ -52,7 +56,7 @@ const reservationsRouter = createReservationsRouter(
 
 const checkReadiness = async (): Promise<boolean> => {
   try {
-    await pool.query('SELECT 1');
+    await Promise.all([pool.query('SELECT 1'), prisma.$queryRaw`SELECT 1`]);
     return true;
   } catch (error) {
     logger.warn({ err: error }, 'PostgreSQL readiness check failed');
@@ -107,7 +111,7 @@ const shutDown = async (signal: NodeJS.Signals): Promise<void> => {
 
   try {
     await closeHttpServer();
-    await pool.end();
+    await Promise.all([prisma.$disconnect(), pool.end()]);
     logger.info('Graceful shutdown completed');
   } catch (error) {
     logger.error({ err: error }, 'Graceful shutdown failed');
