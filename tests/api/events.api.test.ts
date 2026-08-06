@@ -56,4 +56,39 @@ describe('events API', () => {
     expect(fetched.status).toBe(200);
     expect((fetched.body as { data: { title: string } }).data.title).toBe('Board games');
   });
+
+  it('does not carry organizer authority from one community into another', async () => {
+    const firstCommunityId = await createCommunityFixture(harness.pool);
+    const secondCommunityId = await createCommunityFixture(harness.pool);
+
+    await harness.pool.query(
+      `INSERT INTO community_memberships (community_id, user_id, role, status)
+       VALUES ($1, $2, 'ORGANIZER', 'ACTIVE')`,
+      [firstCommunityId, bobId],
+    );
+
+    const eventBody = {
+      title: 'Cross-community attempt',
+      slug: 'cross-community-attempt',
+      startsAt: '2030-08-03T18:00:00.000Z',
+      endsAt: '2030-08-03T21:00:00.000Z',
+      timezone: 'Europe/Moscow',
+      capacity: 10,
+    };
+
+    const allowed = await request(app)
+      .post(`/api/communities/${firstCommunityId}/events`)
+      .set('authorization', authorizationFor(bobId))
+      .send(eventBody);
+    expect(allowed.status).toBe(201);
+
+    const denied = await request(app)
+      .post(`/api/communities/${secondCommunityId}/events`)
+      .set('authorization', authorizationFor(bobId))
+      .send({ ...eventBody, slug: 'cross-community-denied' });
+    expect(denied.status).toBe(403);
+    expect((denied.body as { error: { code: string } }).error.code).toBe(
+      'COMMUNITY_PERMISSION_DENIED',
+    );
+  });
 });

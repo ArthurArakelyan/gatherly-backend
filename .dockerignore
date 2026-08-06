@@ -5,7 +5,12 @@ coverage
 .gitignore
 .env
 .env.*
-!.env.example
 *.log
+*.tmp
+.vscode
+.idea
+docs
+db
 README.md
 AGENTS.md
+PHASE_*.md

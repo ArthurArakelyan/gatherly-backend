@@ -53,6 +53,23 @@ Phase 5 adds failure evidence around that baseline. The important missing
 proofs are transaction rollback, bounded shutdown, dependency outage, and a
 repeatable production-style container gate.
 
+## Current implementation status
+
+The automated-testing portion of this handbook is now implemented:
+
+- shutdown-aware readiness and the reusable graceful-shutdown coordinator;
+- graceful draining, repeated-signal, and forced-timeout integration tests;
+- PostgreSQL-trigger failure injection proving cancellation/promotion rollback;
+- forged, expired, wrong-issuer, and wrong-audience JWT tests;
+- cross-community event authorization coverage;
+- suspended-membership reservation denial with durable-state assertions.
+
+The remaining checkpoints are operational exercises: running and inspecting
+the hardened containers, rehearsing the one-shot migration workflow, executing
+the PostgreSQL outage drill, and running the local release gate. Their scripts
+and commands remain below so they can be performed when Docker behavior is the
+learning target.
+
 ---
 
 ## Checkpoint 1: Record a clean baseline
@@ -744,7 +761,9 @@ describe('graceful HTTP shutdown', () => {
       closeDependencies,
     });
 
-    const responsePromise = fetch(`http://127.0.0.1:${String(port)}/slow`);
+    const responsePromise = fetch(`http://127.0.0.1:${String(port)}/slow`, {
+      headers: { connection: 'close' },
+    });
     await requestStarted.promise;
 
     const firstShutdown = shutdown.shutdown('SIGTERM');

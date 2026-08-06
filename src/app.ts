@@ -13,6 +13,7 @@ export interface AppDependencies {
   enableHttpLogging: boolean;
   logger: Logger;
   checkReadiness: () => Promise<boolean>;
+  isShuttingDown: () => boolean;
   communitiesRouter: Router;
   membershipsRouter: Router;
   eventsRouter: Router;
@@ -36,6 +37,11 @@ export const createApp = (dependencies: AppDependencies): Express => {
     response.status(200).json({ status: 'ok' });
   });
   app.get('/health/ready', async (_request, response) => {
+    if (dependencies.isShuttingDown()) {
+      response.status(503).json({ status: 'not_ready' });
+      return;
+    }
+
     const ready = await dependencies.checkReadiness();
     response.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'not_ready' });
   });

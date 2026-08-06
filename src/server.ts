@@ -31,6 +31,7 @@ import { Argon2PasswordHasher } from './infrastructure/security/argon2-password-
 import { createRequireAuthenticatedUser } from './shared/auth/authentication.middleware.js';
 import { createIdentityRouter } from './modules/identity/identity.routes.js';
 import { IdentityController } from './modules/identity/identity.controller.js';
+import { createGracefulShutdown } from './infrastructure/http/graceful-shutdown.js';
 
 const pinoConfig = {
   redact: {
@@ -107,7 +108,11 @@ const reservationsRouter = createReservationsRouter(
   requireAuthenticatedUser,
 );
 
+const shutdownState = { started: false };
+
 const checkReadiness = async (): Promise<boolean> => {
+  if (shutdownState.started) return false;
+
   try {
     await Promise.all([pool.query('SELECT 1'), prisma.$queryRaw`SELECT 1`]);
     return true;
@@ -122,6 +127,7 @@ const app = createApp({
   enableHttpLogging: environment.NODE_ENV === 'development',
   logger,
   checkReadiness,
+  isShuttingDown: () => shutdownState.started,
   communitiesRouter,
   membershipsRouter,
   eventsRouter,
@@ -135,45 +141,27 @@ server.listen(environment.PORT, () => {
   logger.info({ port: environment.PORT }, 'Gatherly HTTP server started');
 });
 
-const closeHttpServer = (): Promise<void> =>
-  new Promise((resolve, reject) => {
-    server.close((error) => {
-      if (error === undefined) {
-        resolve();
-        return;
-      }
-      reject(error);
-    });
-  });
-
-let isShuttingDown = false;
-
-const shutDown = async (signal: NodeJS.Signals): Promise<void> => {
-  if (isShuttingDown) return;
-
-  isShuttingDown = true;
-
-  logger.info({ signal }, 'Graceful shutdown started');
-
-  const forcedShutdown = setTimeout(() => {
-    logger.error('Graceful shutdown timed out');
-    server.closeAllConnections();
-    process.exitCode = 1;
-  }, 10_000);
-
-  forcedShutdown.unref();
-
-  try {
-    await closeHttpServer();
+const gracefulShutdown = createGracefulShutdown({
+  server,
+  state: shutdownState,
+  logger,
+  timeoutMs: 10_000,
+  closeDependencies: async () => {
     await Promise.all([prisma.$disconnect(), pool.end()]);
-    logger.info('Graceful shutdown completed');
-  } catch (error) {
-    logger.error({ err: error }, 'Graceful shutdown failed');
-    process.exitCode = 1;
-  } finally {
-    clearTimeout(forcedShutdown);
-  }
+  },
+});
+
+const handleSignal = (signal: NodeJS.Signals): void => {
+  void gracefulShutdown
+    .shutdown(signal)
+    .then(({ forced }) => {
+      if (forced) process.exitCode = 1;
+    })
+    .catch((error: unknown) => {
+      logger.error({ err: error }, 'Graceful shutdown failed');
+      process.exitCode = 1;
+    });
 };
 
-process.once('SIGINT', (signal) => void shutDown(signal));
-process.once('SIGTERM', (signal) => void shutDown(signal));
+process.once('SIGINT', handleSignal);
+process.once('SIGTERM', handleSignal);

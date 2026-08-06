@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import jwt from 'jsonwebtoken';
 
 import { Argon2PasswordHasher } from '../../src/infrastructure/security/argon2-password-hasher.js';
 import { JwtAccessTokens } from '../../src/infrastructure/security/jwt-access-tokens.js';
@@ -34,5 +35,50 @@ describe('security adapters', () => {
     expect(() => tokens.verify(wrongAudience.sign(userId))).toThrow(
       expect.objectContaining({ status: 401, code: 'AUTHENTICATION_REQUIRED' }),
     );
+  });
+
+  it('maps forged, expired, wrong-issuer, and wrong-audience JWTs to one safe error', () => {
+    const secret = 'test-only-jwt-secret-that-is-long-enough';
+    const tokens = new JwtAccessTokens({
+      secret,
+      issuer: 'gatherly-test-api',
+      audience: 'gatherly-test-client',
+      ttlSeconds: 900,
+    });
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const invalidTokens = [
+      `${tokens.sign(userId)}tampered`,
+      jwt.sign({}, secret, {
+        algorithm: 'HS256',
+        subject: userId,
+        issuer: 'gatherly-test-api',
+        audience: 'gatherly-test-client',
+        expiresIn: -1,
+      }),
+      jwt.sign({}, secret, {
+        algorithm: 'HS256',
+        subject: userId,
+        issuer: 'wrong-issuer',
+        audience: 'gatherly-test-client',
+        expiresIn: 900,
+      }),
+      jwt.sign({}, secret, {
+        algorithm: 'HS256',
+        subject: userId,
+        issuer: 'gatherly-test-api',
+        audience: 'wrong-audience',
+        expiresIn: 900,
+      }),
+    ];
+
+    for (const token of invalidTokens) {
+      expect(() => tokens.verify(token)).toThrow(
+        expect.objectContaining({
+          status: 401,
+          code: 'AUTHENTICATION_REQUIRED',
+          message: 'Authentication is required',
+        }),
+      );
+    }
   });
 });

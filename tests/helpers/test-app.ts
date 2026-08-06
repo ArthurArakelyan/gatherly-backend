@@ -77,6 +77,7 @@ export const createTestApp = ({ pool, prisma }: TestDatabase): Express => {
     enableHttpLogging: false,
     logger: pino({ enabled: false }),
     checkReadiness: () => Promise.resolve(true),
+    isShuttingDown: () => false,
     communitiesRouter,
     membershipsRouter,
     eventsRouter,

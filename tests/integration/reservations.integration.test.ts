@@ -113,4 +113,72 @@ describe('ReservationsService with PostgreSQL', () => {
       notifications: 1,
     });
   });
+
+  it('rolls back cancellation and promotion when the final notification write fails', async () => {
+    const communityId = await createCommunityFixture(harness.pool);
+    await addActiveMember(harness.pool, communityId, bobId);
+    const eventId = await createEventFixture(harness.pool, communityId);
+
+    await service.reserve(eventId, aliceId, 'alice-before-rollback');
+    await service.reserve(eventId, bobId, 'bob-before-rollback');
+
+    await harness.pool.query(`
+      CREATE FUNCTION phase5_fail_promotion_notification()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF NEW.type = 'WAITLIST_PROMOTED' THEN
+          RAISE EXCEPTION 'phase5 injected notification failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+
+      CREATE TRIGGER phase5_fail_promotion_notification_trigger
+      BEFORE INSERT ON notifications
+      FOR EACH ROW
+      EXECUTE FUNCTION phase5_fail_promotion_notification();
+    `);
+
+    try {
+      await expect(service.cancelReservation(eventId, aliceId)).rejects.toThrow(
+        'phase5 injected notification failure',
+      );
+
+      const state = await harness.pool.query<{
+        alice_confirmed: number;
+        bob_confirmed: number;
+        bob_waiting: number;
+        bob_promoted: number;
+        promotion_notifications: number;
+      }>(
+        `SELECT
+           (SELECT count(*)::integer FROM reservations
+            WHERE event_id = $1 AND user_id = $2 AND status = 'CONFIRMED') AS alice_confirmed,
+           (SELECT count(*)::integer FROM reservations
+            WHERE event_id = $1 AND user_id = $3 AND status = 'CONFIRMED') AS bob_confirmed,
+           (SELECT count(*)::integer FROM waitlist_entries
+            WHERE event_id = $1 AND user_id = $3 AND status = 'WAITING') AS bob_waiting,
+           (SELECT count(*)::integer FROM waitlist_entries
+            WHERE event_id = $1 AND user_id = $3 AND status = 'PROMOTED') AS bob_promoted,
+           (SELECT count(*)::integer FROM notifications
+            WHERE user_id = $3 AND type = 'WAITLIST_PROMOTED') AS promotion_notifications`,
+        [eventId, aliceId, bobId],
+      );
+
+      expect(state.rows[0]).toEqual({
+        alice_confirmed: 1,
+        bob_confirmed: 0,
+        bob_waiting: 1,
+        bob_promoted: 0,
+        promotion_notifications: 0,
+      });
+    } finally {
+      await harness.pool.query(`
+        DROP TRIGGER IF EXISTS phase5_fail_promotion_notification_trigger ON notifications;
+        DROP FUNCTION IF EXISTS phase5_fail_promotion_notification();
+      `);
+    }
+  });
 });

@@ -16,10 +16,23 @@ services:
       retries: 10
       start_period: 10s
 
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migration
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runtime
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -30,6 +43,7 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       CORS_ORIGIN: ${CORS_ORIGIN}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PGPOOL_MAX: ${PGPOOL_MAX:-5}
       PRISMA_POOL_MAX: ${PRISMA_POOL_MAX:-5}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ISSUER: ${JWT_ISSUER:-gatherly-api}
@@ -38,8 +52,8 @@ services:
     ports:
       - '127.0.0.1:${APP_PORT}:3000'
     depends_on:
-      postgres:
-        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -54,6 +68,15 @@ services:
       start_period: 5s
     init: true
     stop_grace_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    pids_limit: 100
+    mem_limit: 512m
 
 volumes:
   postgres_data:

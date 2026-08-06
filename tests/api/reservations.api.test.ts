@@ -62,4 +62,37 @@ describe('reservations API', () => {
     expect(duplicate.status).toBe(409);
     expect((duplicate.body as { error: { code: string } }).error.code).toBe('ALREADY_RESERVED');
   });
+
+  it('rejects a reservation after membership becomes suspended', async () => {
+    const communityId = await createCommunityFixture(harness.pool);
+    const eventId = await createEventFixture(harness.pool, communityId);
+
+    await harness.pool.query(
+      `UPDATE community_memberships
+       SET status = 'SUSPENDED', updated_at = now()
+       WHERE community_id = $1 AND user_id = $2`,
+      [communityId, aliceId],
+    );
+
+    const response = await request(app)
+      .post(`/api/events/${eventId}/reservations`)
+      .set('authorization', authorizationFor(aliceId))
+      .set('Idempotency-Key', 'suspended-membership-attempt')
+      .send({});
+
+    expect(response.status).toBe(403);
+    expect((response.body as { error: { code: string } }).error.code).toBe(
+      'COMMUNITY_PERMISSION_DENIED',
+    );
+
+    const state = await harness.pool.query<{ reservations: number; waitlist: number }>(
+      `SELECT
+         (SELECT count(*)::integer FROM reservations
+          WHERE event_id = $1 AND user_id = $2) AS reservations,
+         (SELECT count(*)::integer FROM waitlist_entries
+          WHERE event_id = $1 AND user_id = $2) AS waitlist`,
+      [eventId, aliceId],
+    );
+    expect(state.rows[0]).toEqual({ reservations: 0, waitlist: 0 });
+  });
 });
