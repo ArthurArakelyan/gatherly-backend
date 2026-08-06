@@ -13,6 +13,7 @@ const app = createApp({
   membershipsRouter: Router(),
   eventsRouter: Router(),
   reservationsRouter: Router(),
+  identityRouter: Router(),
 });
 
 describe('GET /health/live', () => {

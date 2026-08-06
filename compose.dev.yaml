@@ -4,6 +4,9 @@ services:
       target: development
     environment:
       NODE_ENV: development
+      # Available only in the development container for the explicit
+      # `yarn db:seed` command; application startup does not read it.
+      DEVELOPMENT_SEED_PASSWORD: ${DEVELOPMENT_SEED_PASSWORD}
       # Docker Desktop bind mounts can update file contents without forwarding
       # filesystem events to Linux containers. Polling keeps tsx watch reliable.
       CHOKIDAR_USEPOLLING: 'true'

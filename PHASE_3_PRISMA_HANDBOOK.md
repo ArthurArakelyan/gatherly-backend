@@ -334,7 +334,7 @@ model Community {
   createdByUserId String                @map("created_by_user_id") @db.Uuid
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
-  creator         User                  @relation("CommunityCreator", fields: [createdByUserId], references: [id])
+  creator         User                  @relation("CommunityCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   memberships     CommunityMembership[]
   events          Event[]
 
@@ -351,8 +351,8 @@ model CommunityMembership {
   joinedAt    DateTime  @default(now()) @map("joined_at") @db.Timestamptz(6)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
-  community   Community @relation(fields: [communityId], references: [id])
-  user        User      @relation(fields: [userId], references: [id])
+  community   Community @relation(fields: [communityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([communityId, userId], map: "community_memberships_user_community_key")
   @@index([userId, communityId], map: "community_memberships_user_idx")
@@ -375,8 +375,8 @@ model Event {
   capacity        Int
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
-  community       Community       @relation(fields: [communityId], references: [id])
-  creator         User            @relation("EventCreator", fields: [createdByUserId], references: [id])
+  community       Community       @relation(fields: [communityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator         User            @relation("EventCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   reservations    Reservation[]
   waitlistEntries WaitlistEntry[]
 
@@ -401,8 +401,8 @@ model Reservation {
   cancellationReason String?   @map("cancellation_reason")
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
-  event              Event     @relation(fields: [eventId], references: [id])
-  user               User      @relation(fields: [userId], references: [id])
+  event              Event     @relation(fields: [eventId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user               User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([eventId, status], map: "reservations_event_status_idx")
   @@map("reservations")
@@ -418,8 +418,8 @@ model WaitlistEntry {
   cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(6)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
-  event       Event     @relation(fields: [eventId], references: [id])
-  user        User      @relation(fields: [userId], references: [id])
+  event       Event     @relation(fields: [eventId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("waitlist_entries")
 }
@@ -430,10 +430,10 @@ model Notification {
   type      String
   title     String
   message   String
-  data      Json      @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  data      Json      @default("{}") @db.JsonB
   readAt    DateTime? @map("read_at") @db.Timestamptz(6)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  user      User      @relation(fields: [userId], references: [id])
+  user      User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("notifications")
 }
@@ -448,7 +448,7 @@ model IdempotencyKey {
   responseBody   Json?     @map("response_body") @db.JsonB
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   completedAt    DateTime? @map("completed_at") @db.Timestamptz(6)
-  user           User      @relation(fields: [userId], references: [id])
+  user           User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([userId, scope, key], map: "idempotency_keys_user_scope_key_key")
   @@map("idempotency_keys")
@@ -461,6 +461,13 @@ there is one `generator`, one `datasource`, and all eight models in one file.
 The `String` status fields are intentional. The database uses text columns plus
 `CHECK` constraints, not PostgreSQL enum types. Inventing Prisma enums would
 change the physical model. Keep existing module-owned status unions.
+
+The explicit `onDelete: NoAction, onUpdate: NoAction` relation actions preserve
+the foreign keys created by the Phase 2 SQL. Omitting them makes Prisma use its
+own referential-action defaults and causes the first later migration to
+needlessly drop and recreate every foreign key. The JSON `{}` default likewise
+uses Prisma's native JSON-default syntax so it matches the existing PostgreSQL
+default without generating an unrelated alteration.
 
 Prisma cannot express the Phase 2 partial unique indexes or `CHECK`
 constraints. They remain in the SQL baseline migration and PostgreSQL continues
@@ -503,6 +510,33 @@ without executing it:
 docker compose -f compose.yaml -f compose.dev.yaml exec app yarn prisma migrate resolve --applied 0_phase2_baseline
 docker compose -f compose.yaml -f compose.dev.yaml exec app yarn prisma migrate status
 ```
+
+### Retire the Phase 2 migration-runner history table
+
+The old Phase 2 migration runner created a `schema_migrations` bookkeeping
+table. It is not part of the product schema or the Prisma baseline. Leaving it
+in place makes Prisma report drift as an added table and prevents
+`prisma migrate dev --create-only` from generating future migrations.
+
+On an existing **local development** database, first confirm that Prisma has
+recorded the baseline, then remove only the obsolete history table:
+
+```powershell
+# This must return 0_phase2_baseline before the DROP command is run.
+docker compose exec postgres psql -U gatherly -d gatherly -c "SELECT migration_name FROM \"_prisma_migrations\" WHERE migration_name = '0_phase2_baseline' AND finished_at IS NOT NULL;"
+
+# The table holds only the old runner's migration names, not application data.
+docker compose exec postgres psql -U gatherly -d gatherly -c "DROP TABLE schema_migrations;"
+
+# This should now succeed without reporting schema_migrations as drift.
+docker compose -f compose.yaml -f compose.dev.yaml exec app yarn prisma migrate status
+```
+
+Do not drop `schema_migrations` if the baseline query returned no row, on an
+empty database, or anywhere still operated by the old `db:migrate` runner. In
+those cases, resolve or deploy the Prisma baseline first. Do not use
+`prisma migrate reset` merely to remove this obsolete history table: it drops
+all development data.
 
 For a fresh disposable database, do not resolve anything. Run:
 

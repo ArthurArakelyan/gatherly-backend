@@ -17,16 +17,17 @@ it: the lesson is where authentication ends and authorization begins.
 At the end of Phase 4, Gatherly has:
 
 - username/password sign-up and sign-in;
+- a protected endpoint for reading the current authenticated user;
 - Argon2id password hashes and no recoverable passwords;
 - a short-lived signed bearer access token;
 - a database-backed authentication check on every protected request;
 - immediate rejection of suspended or deleted accounts;
-- sign-in rate limiting and generic invalid-credential responses;
+- separate sign-up and sign-in rate limiting plus generic invalid-credential responses;
 - no remaining trust in `x-user-id`;
 - object-level community authorization in services;
 - tests for missing, malformed, expired, and forged tokens;
 - tests for bans, inactive membership, insufficient roles, cross-community ID
-  substitution, and owner protection;
+  substitution, and owner protection when member management is exposed;
 - updated OpenAPI and local setup documentation.
 
 The protected request flow becomes:
@@ -54,6 +55,7 @@ Build only:
 ```text
 POST /auth/sign-up
 POST /auth/sign-in
+GET  /auth/me
 Authorization: Bearer <short-lived access token>
 ```
 
@@ -73,6 +75,190 @@ Do not add:
 An access token lifetime around 15 minutes is enough for this learning phase.
 When it expires, the client signs in again. That is intentionally less
 convenient than a production session system and keeps the lesson narrow.
+
+### Refresh tokens are not bad; incomplete refresh-token systems are bad
+
+This phase omits refresh tokens because of scope, not because refresh tokens are
+an insecure idea. A correctly implemented refresh token lets a client obtain a
+new short-lived access token without asking the user for credentials again. It
+is useful when a product needs long-lived sign-in across browser restarts,
+native applications, multiple devices, or independent API clients.
+
+The security tradeoff is that a refresh token is normally a long-lived
+credential. Anyone who steals an ordinary bearer refresh token can keep minting
+new access tokens until the refresh token expires or is revoked. A 15-minute
+access token limits one stolen access token; a 30-day refresh token can silently
+extend the compromise for 30 days. The refresh token therefore requires more
+protection and lifecycle management than the access token it replaces.
+
+Current OAuth security guidance does not say “never use refresh tokens.” It
+says an authorization server must decide whether a client actually needs one,
+and public clients that receive refresh tokens need replay detection through
+rotation or sender-constraining. See
+[OAuth 2.0 Security Best Current Practice, RFC 9700, section 4.14](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14).
+
+Although Gatherly's direct username/password flow is not an OAuth authorization
+server, the same stolen-bearer-token and replay risks apply.
+
+#### What adding refresh tokens really adds
+
+A credible implementation needs all of these decisions and tests:
+
+1. **Storage:** where the client keeps the token without exposing it to routine
+   JavaScript, logs, URLs, crash reports, browser extensions, backups, or other
+   applications.
+2. **Server state:** which user, session, token family, device label, creation
+   time, last-use time, idle expiry, and absolute expiry belong to the token.
+3. **Rotation:** whether every successful refresh invalidates the presented
+   token and returns a new one.
+4. **Replay detection:** what happens when an already rotated token is used
+   again. The usual safe response is to revoke the entire token family because
+   the server cannot know whether the attacker or legitimate client arrived
+   first.
+5. **Concurrency:** how two browser tabs or simultaneous API retries avoid
+   rotating the same token twice and falsely looking like theft.
+6. **Revocation:** how logout, account suspension, password change, credential
+   reset, administrator action, and suspected compromise invalidate sessions.
+7. **Expiry:** both a sliding idle timeout and a non-extendable absolute session
+   lifetime.
+8. **Request security:** refresh endpoint rate limiting, safe errors, token
+   hashing at rest, transaction boundaries, and audit events.
+9. **Browser threats:** an `HttpOnly` cookie reduces token theft by JavaScript
+   but introduces ambient cookie submission, so CSRF and `Origin` validation
+   must be addressed. A JavaScript-readable token avoids cookie CSRF but is
+   directly exposed to successful XSS.
+10. **Cleanup and operations:** deleting expired session rows, listing/revoking
+    active sessions when the product needs it, and handling signing-key or
+    database incidents.
+
+That is why “just issue another JWT with a longer expiration” is not a complete
+refresh-token design. A self-contained JWT refresh token is still replayable
+after theft. Once rotation, reuse detection, logout, and revocation are
+required, the server needs session state anyway. An opaque random refresh token
+whose hash is stored in PostgreSQL is usually simpler for a first-party system.
+
+#### Good choices by client type
+
+| Client/product shape                                   | Usually best starting design                                                                                                                      | Why                                                                                                                                                                                                                                                |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First-party browser and API owned together             | Opaque server-side session ID in a secure cookie                                                                                                  | The browser never receives an API bearer or refresh token; PostgreSQL can revoke the session immediately.                                                                                                                                          |
+| Browser frontend using an external OAuth/OIDC provider | Backend for Frontend (BFF) with tokens stored server-side and an opaque browser session cookie                                                    | The BFF acts as the confidential client and keeps access/refresh tokens out of browser JavaScript. Current browser-app guidance describes this pattern in [RFC 10017](https://www.rfc-editor.org/rfc/rfc10017.html#name-backend-for-frontend-bff). |
+| Native/mobile application                              | Authorization Code with PKCE through the system browser, tokens in OS-protected storage, with rotation or sender-constraining                     | Native apps cannot safely hold a universal client secret; use the platform browser and protected key/token storage. See [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252.html).                                                                   |
+| Public SPA with no backend component                   | Short access tokens plus rotating refresh tokens, strict browser hardening, and careful reuse handling; accept that XSS can still act as the user | This is possible but exposes more security-sensitive machinery to a public client. PKCE protects the authorization-code exchange, not tokens from malicious JavaScript already executing in the app.                                               |
+| High-risk OAuth client able to protect key material    | Sender-constrained tokens using DPoP or mutual TLS                                                                                                | A stolen token alone is insufficient without proof of the bound key. [RFC 9449](https://www.rfc-editor.org/rfc/rfc9449.html) defines DPoP. This is far beyond Gatherly's current needs.                                                            |
+
+For a future Gatherly browser frontend, the simplest robust upgrade would
+usually be a normal server-side session rather than access-token plus
+refresh-token machinery:
+
+```text
+browser receives:
+  Set-Cookie: gatherly_session=<random opaque value>;
+              HttpOnly; Secure; SameSite=Lax; Path=/
+
+PostgreSQL stores:
+  hash(session value), user_id, created_at, last_used_at,
+  idle_expires_at, absolute_expires_at, revoked_at
+
+each request:
+  hash cookie -> load current session and user -> require both active
+
+logout:
+  revoke/delete session row -> expire cookie
+```
+
+This still requires CSRF analysis for state-changing requests because the
+browser automatically sends cookies. `SameSite` is a useful layer, not the sole
+defense; verify allowed origins and use a CSRF token where the deployment and
+request shape require it.
+
+#### If Gatherly later chooses rotating refresh tokens
+
+Use short-lived access tokens plus opaque, database-backed refresh sessions.
+Do not put the raw refresh token in PostgreSQL. A reasonable data shape is:
+
+```text
+auth_sessions
+  id                  UUID primary key
+  user_id             UUID foreign key
+  family_id           UUID
+  refresh_token_hash  bytea unique
+  created_at          timestamptz
+  last_used_at        timestamptz
+  idle_expires_at     timestamptz
+  absolute_expires_at timestamptz
+  rotated_at          timestamptz nullable
+  replaced_by_id      UUID nullable
+  revoked_at          timestamptz nullable
+  revocation_reason   text nullable
+```
+
+The refresh operation must be one PostgreSQL transaction:
+
+```text
+POST /auth/refresh
+  -> read refresh credential from its protected transport/storage
+  -> hash it before lookup
+  -> SELECT session row FOR UPDATE
+  -> reject revoked, idle-expired, or absolute-expired session
+  -> if already rotated:
+       revoke every active row in family_id (probable replay)
+       reject with one safe authentication error
+  -> create a cryptographically random replacement refresh token
+  -> insert its hash as the next session row
+  -> mark current row rotated and link replaced_by_id
+  -> issue a new short-lived access token
+  -> COMMIT
+  -> return the new access token and replacement refresh credential
+```
+
+Generate at least 256 bits of randomness for an opaque refresh token, transmit
+it only over TLS, compare hashes safely, and rate-limit refresh attempts. Give
+the session both idle and absolute expiration. Rotate on every successful use;
+never extend the absolute lifetime during rotation.
+
+For a browser, a common arrangement is:
+
+```text
+access token:
+  held only in application memory
+  sent in Authorization header
+  expires in roughly 5-15 minutes
+
+refresh token:
+  Secure + HttpOnly cookie
+  narrow Path=/auth/refresh
+  appropriate SameSite policy
+  never returned in JSON and never stored in localStorage
+```
+
+The refresh endpoint must then defend against cross-site requests. Check the
+expected `Origin`, choose an intentional `SameSite` policy, and add a CSRF token
+when cross-site deployment requirements prevent a strict same-site design.
+
+Rotation also needs an explicit client concurrency rule. For example, the
+client can allow only one refresh request at a time and make other failed API
+requests await it. The server may retain a very short, carefully designed grace
+window for the immediately previous token, but that weakens strict replay
+detection and must never become unlimited reuse. An atomic database exchange
+plus single-flight client refresh is the clearer starting point.
+
+Required tests would include:
+
+- successful rotation invalidates the old token;
+- replay of an old token revokes the whole family;
+- two concurrent refreshes cannot both create valid successor chains;
+- logout revokes the session;
+- account suspension rejects both refresh and protected API requests;
+- idle expiry and absolute expiry behave independently;
+- a database failure midway leaves either the old session usable or the new
+  session committed, never a half-rotated family;
+- raw refresh tokens never appear in PostgreSQL, logs, URLs, or JSON error
+  responses.
+
+This is a good later vertical slice if persistent sign-in becomes a real
+requirement. It is intentionally not smuggled into Phase 4 merely to make the
+authentication feature look more complete.
 
 ## Step 1: Prove the Phase 3 baseline
 
@@ -113,9 +299,10 @@ For this phase, defend against these concrete mistakes:
 5. A suspended account continues using an otherwise valid token.
 6. A sign-in response reveals whether a username exists.
 7. Repeated sign-in guesses are unlimited.
-8. Passwords, bearer tokens, or the `Authorization` header enter logs.
-9. A moderator removes or demotes the community owner.
-10. An organizer in community A manages an object in community B.
+8. Repeated sign-up attempts consume hashing resources and create account spam.
+9. Passwords, bearer tokens, or the `Authorization` header enter logs.
+10. A moderator removes or demotes the community owner.
+11. An organizer in community A manages an object in community B.
 
 Authentication answers only:
 
@@ -172,6 +359,96 @@ Prisma cannot invent passwords for the three existing development users. Edit
 the generated migration to lock existing rows with an unrecognizable random
 marker, then enforce `NOT NULL`:
 
+1. Run the command above exactly once. It may warn that adding required
+   `password_hash` is impossible with the three existing rows, but
+   `--create-only` still creates a new, **unapplied** directory such as
+   `prisma/migrations/20260806123000_add_minimal_auth/`.
+2. Open that directory's `migration.sql`. Do **not** edit the already-applied
+   `0_phase2_baseline` migration.
+3. Replace the **entire contents** of that generated file with the complete SQL
+   below. Do not keep unrelated generated foreign-key or default-value changes;
+   this migration is only for the credential and platform-role columns. The
+   initially nullable `password_hash` column lets PostgreSQL update Alice, Bob,
+   and Carol before `NOT NULL` is enforced.
+4. Save the migration, review it, and run `yarn db:migrate:dev` (without
+   `--create-only`) to apply it. Do not rerun `--create-only` after the first
+   command: Prisma will instead try to apply the still-unedited pending file.
+
+```text
+Existing development users are deliberately locked by this migration; they
+cannot sign in yet. Step 13 replaces their marker values with real,
+development-only Argon2id hashes through the explicit seed command.
+```
+
+### Recovering from an accidentally applied generated migration
+
+If `yarn db:migrate:dev --create-only ...` was run a second time before you
+replaced its SQL, Prisma may try the unsafe generated migration and report
+`P3018` / `password_hash ... contains null values`. Do not assume all earlier
+statements were rolled back: a Prisma SQL migration is not automatically one
+PostgreSQL transaction. The generated file may already have dropped foreign
+keys before reaching the failing statement.
+
+First replace the migration file with the SQL below. Then run
+`yarn db:migrate:dev` and read any drift report. If it reports foreign keys
+removed from the Phase 2 tables, restore those exact constraints from
+`0_phase2_baseline/migration.sql` after verifying there are no orphaned rows.
+Do not accept a reset just to repair migration metadata or dropped constraints.
+
+For this project, the unsafe generated migration may have removed these eleven
+baseline constraints. After checking the child rows still reference existing
+parents, restore them in one transaction:
+
+```sql
+BEGIN;
+
+ALTER TABLE communities
+  ADD CONSTRAINT communities_created_by_user_id_fkey
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id);
+ALTER TABLE community_memberships
+  ADD CONSTRAINT community_memberships_community_id_fkey
+  FOREIGN KEY (community_id) REFERENCES communities(id),
+  ADD CONSTRAINT community_memberships_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE events
+  ADD CONSTRAINT events_community_id_fkey
+  FOREIGN KEY (community_id) REFERENCES communities(id),
+  ADD CONSTRAINT events_created_by_user_id_fkey
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id);
+ALTER TABLE idempotency_keys
+  ADD CONSTRAINT idempotency_keys_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE notifications
+  ADD CONSTRAINT notifications_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE reservations
+  ADD CONSTRAINT reservations_event_id_fkey
+  FOREIGN KEY (event_id) REFERENCES events(id),
+  ADD CONSTRAINT reservations_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE waitlist_entries
+  ADD CONSTRAINT waitlist_entries_event_id_fkey
+  FOREIGN KEY (event_id) REFERENCES events(id),
+  ADD CONSTRAINT waitlist_entries_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES users(id);
+
+COMMIT;
+```
+
+After the physical schema again matches the baseline, mark the failed attempt
+as rolled back only if Prisma still records it as failed, then apply the
+corrected migration:
+
+```powershell
+# Use the exact directory name created on your machine.
+yarn prisma migrate resolve --rolled-back 20260806123000_add_minimal_auth
+yarn db:migrate:dev
+```
+
+Use `--rolled-back` only for a migration whose application failed. Never delete
+the migration directory. Use `prisma migrate reset` only when you deliberately
+choose to discard the entire disposable development database.
+
 ```sql
 ALTER TABLE users
   ADD COLUMN password_hash text,
@@ -179,7 +456,7 @@ ALTER TABLE users
   ADD COLUMN last_login_at timestamptz;
 
 UPDATE users
-SET password_hash = 'locked:' || encode(gen_random_bytes(32), 'hex')
+SET password_hash = 'locked:' || gen_random_uuid()::text
 WHERE password_hash IS NULL;
 
 ALTER TABLE users
@@ -195,6 +472,9 @@ ALTER TABLE users
 Why use a locked marker instead of a shared migration password?
 
 - database migrations must not contain a usable shared credential;
+- `gen_random_uuid()` is already required by the Phase 2 baseline, whereas
+  `gen_random_bytes()` would add an undocumented dependency on `pgcrypto` and
+  fail when Prisma builds its shadow database;
 - old users cannot authenticate until a development seed explicitly gives
   them a development-only password;
 - new sign-ups always receive a real Argon2id hash;
@@ -225,6 +505,29 @@ JWT_ACCESS_TOKEN_TTL_SECONDS=900
 # Used only by the explicit development seed command, never by the server.
 DEVELOPMENT_SEED_PASSWORD=replace-with-a-local-development-password
 ```
+
+A project `.env` file supplies values for Compose interpolation; Docker Compose
+does not automatically inject every entry into the application container. Add
+the runtime authentication settings to `app.environment` in `compose.yaml`:
+
+```yaml
+JWT_SECRET: ${JWT_SECRET}
+JWT_ISSUER: ${JWT_ISSUER:-gatherly-api}
+JWT_AUDIENCE: ${JWT_AUDIENCE:-gatherly-client}
+JWT_ACCESS_TOKEN_TTL_SECONDS: ${JWT_ACCESS_TOKEN_TTL_SECONDS:-900}
+```
+
+Add only the development seed credential to `app.environment` in
+`compose.dev.yaml`:
+
+```yaml
+DEVELOPMENT_SEED_PASSWORD: ${DEVELOPMENT_SEED_PASSWORD}
+```
+
+This makes `docker compose -f compose.yaml -f compose.dev.yaml exec app yarn
+db:seed` work without exposing the development seed credential in the base
+production-style container. The running development server inherits the value
+but never reads it; only `prisma/seed.ts` does.
 
 Extend `src/config/env.ts`:
 
@@ -270,11 +573,7 @@ export interface CredentialUser extends PublicUser {
   passwordHash: string;
 }
 
-export interface AuthenticatedUser {
-  id: string;
-  username: string;
-  platformRole: PlatformRole;
-}
+export type AuthenticatedUser = PublicUser;
 
 export interface SignUpInput {
   username: string;
@@ -333,9 +632,14 @@ trim, lowercase, normalize, or log passwords. Username normalization is safe
 because the product defines usernames as lowercase ASCII identifiers and the
 database already enforces the same format.
 
-## Step 6: Isolate Argon2id behind a small service
+## Step 6: Isolate Argon2id in infrastructure
 
-Create `src/modules/identity/password-hasher.ts`:
+The identity module keeps only its six standard file roles. The concrete
+third-party adapter belongs under infrastructure and does not import from the
+identity module. `IdentityService` will describe the small shape it needs;
+TypeScript's structural typing connects the two at the composition root.
+
+Create `src/infrastructure/security/argon2-password-hasher.ts`:
 
 ```ts
 import argon2 from 'argon2';
@@ -347,7 +651,7 @@ const options = {
   parallelism: 1,
 } as const;
 
-export class PasswordHasher {
+export class Argon2PasswordHasher {
   public hash(password: string): Promise<string> {
     return argon2.hash(password, options);
   }
@@ -356,7 +660,7 @@ export class PasswordHasher {
     if (!passwordHash.startsWith('$argon2id$')) return false;
 
     try {
-      return await argon2.verify(passwordHash, password, options);
+      return await argon2.verify(passwordHash, password);
     } catch {
       return false;
     }
@@ -370,13 +674,19 @@ before production use; stronger parameters are useful only when the server can
 afford them. The stored encoding contains the salt and parameters, so no
 separate salt column is needed.
 
+`verify()` receives no hashing-options object. Argon2 reads its algorithm and
+cost parameters from the encoded hash, and the package's `VerifyOptions` type
+does not accept the hashing-options object.
+
 The `startsWith` check makes the migration's `locked:` values safely
 unverifiable. Catch only inside this credential comparison boundary: a damaged
 hash means invalid credentials, not a 500 containing storage details.
 
-## Step 7: Create a narrow JWT service
+## Step 7: Isolate JWT handling in infrastructure
 
-Create `src/modules/identity/access-token.service.ts`:
+JWT signing and verification wrap another third-party package, so they also do
+not belong in an extra identity-module file. Create
+`src/infrastructure/security/jwt-access-tokens.ts`:
 
 ```ts
 import jwt, { type JwtPayload } from 'jsonwebtoken';
@@ -399,7 +709,7 @@ const tokenPayloadSchema = z.object({
   iat: z.number().int(),
 });
 
-export class AccessTokenService {
+export class JwtAccessTokens {
   public constructor(private readonly configuration: AccessTokenConfiguration) {}
 
   public sign(userId: string): string {
@@ -512,10 +822,10 @@ export class IdentityRepository {
   public async findAuthenticatedById(userId: string): Promise<AuthenticatedUser | null> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, status: true, platformRole: true },
+      select: publicUserSelection,
     });
     if (user === null || user.status !== 'ACTIVE') return null;
-    return { ...user, platformRole: user.platformRole as PlatformRole };
+    return mapPublicUser(user);
   }
 
   public async recordSuccessfulLogin(userId: string): Promise<void> {
@@ -538,9 +848,7 @@ Create `src/modules/identity/identity.service.ts`:
 
 ```ts
 import { AppError } from '../../shared/errors/app-error.js';
-import type { AccessTokenService } from './access-token.service.js';
 import type { IdentityRepository } from './identity.repository.js';
-import type { PasswordHasher } from './password-hasher.js';
 import type {
   AuthenticatedUser,
   AuthenticationResult,
@@ -548,6 +856,16 @@ import type {
   SignInInput,
   SignUpInput,
 } from './identity.types.js';
+
+interface PasswordHasher {
+  hash(password: string): Promise<string>;
+  verify(passwordHash: string, password: string): Promise<boolean>;
+}
+
+interface AccessTokens {
+  sign(userId: string): string;
+  verify(token: string): string;
+}
 
 // This is a valid hash for an irrelevant password. It is public on purpose and
 // exists only to make an unknown username perform one Argon2 verification.
@@ -559,7 +877,7 @@ export class IdentityService {
   public constructor(
     private readonly repository: IdentityRepository,
     private readonly passwordHasher: PasswordHasher,
-    private readonly accessTokens: AccessTokenService,
+    private readonly accessTokens: AccessTokens,
     private readonly accessTokenTtlSeconds: number,
   ) {}
 
@@ -624,20 +942,23 @@ Create `src/modules/identity/identity.controller.ts`:
 ```ts
 import type { RequestHandler } from 'express';
 
+import { getAuthenticatedUser } from '../../shared/auth/authentication.middleware.js';
 import { getValidated } from '../../shared/validation/validate.middleware.js';
 import type { SignInRequest, SignUpRequest } from './identity.schemas.js';
 import type { IdentityService } from './identity.service.js';
-import type { AuthenticationResult } from './identity.types.js';
+import type { AuthenticationResult, PublicUser } from './identity.types.js';
+
+const toPublicUserDto = (user: PublicUser) => ({
+  id: user.id,
+  username: user.username,
+  status: user.status,
+  platformRole: user.platformRole,
+  createdAt: user.createdAt.toISOString(),
+});
 
 const toAuthenticationDto = (result: AuthenticationResult) => ({
   data: {
-    user: {
-      id: result.user.id,
-      username: result.user.username,
-      status: result.user.status,
-      platformRole: result.user.platformRole,
-      createdAt: result.user.createdAt.toISOString(),
-    },
+    user: toPublicUserDto(result.user),
     accessToken: result.accessToken,
     tokenType: result.tokenType,
     expiresIn: result.expiresIn,
@@ -656,13 +977,17 @@ export class IdentityController {
     const { body } = getValidated<SignInRequest>(response);
     response.json(toAuthenticationDto(await this.service.signIn(body)));
   };
+
+  public readonly me: RequestHandler = (_request, response) => {
+    response.json({ data: { user: toPublicUserDto(getAuthenticatedUser(response)) } });
+  };
 }
 ```
 
 Create `src/modules/identity/identity.routes.ts`:
 
 ```ts
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { rateLimit } from 'express-rate-limit';
 
 import { AppError } from '../../shared/errors/app-error.js';
@@ -680,17 +1005,38 @@ const signInLimiter = rateLimit({
   },
 });
 
-export const createIdentityRouter = (controller: IdentityController): Router => {
+const signUpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1_000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_request, _response, next) => {
+    next(new AppError(429, 'SIGN_UP_RATE_LIMITED', 'Try creating an account again later'));
+  },
+});
+
+export const createIdentityRouter = (
+  controller: IdentityController,
+  requireAuthenticatedUser: RequestHandler,
+): Router => {
   const router = Router();
-  router.post('/sign-up', validate(signUpRequestSchema), controller.signUp);
+  router.post('/sign-up', signUpLimiter, validate(signUpRequestSchema), controller.signUp);
   router.post('/sign-in', signInLimiter, validate(signInRequestSchema), controller.signIn);
+  router.get('/me', requireAuthenticatedUser, controller.me);
   return router;
 };
 ```
 
-The in-memory limiter is enough for one-process Phase 4. It is not durable and
-does not coordinate multiple application replicas. Redis rate limiting belongs
-to its later phase, when there is a real multi-instance need.
+Sign-up and sign-in use separate buckets because they defend different costs:
+sign-up limits expensive hashing plus durable account creation, while sign-in
+limits credential guessing. The in-memory limiters are enough for one-process
+Phase 4. They are not durable and do not coordinate multiple application
+replicas. Redis rate limiting belongs to its later phase, when there is a real
+multi-instance need.
+
+`GET /auth/me` does not query PostgreSQL a second time. The authentication
+middleware has already verified the token and loaded the current active user;
+the controller serializes that value from `response.locals`.
 
 Do not set Express `trust proxy` casually. Behind the future Nginx deployment,
 configure the exact trusted proxy topology before relying on forwarded client
@@ -817,14 +1163,14 @@ middleware:
 
 ```ts
 import { createRequireAuthenticatedUser } from './shared/auth/authentication.middleware.js';
-import { AccessTokenService } from './modules/identity/access-token.service.js';
+import { JwtAccessTokens } from './infrastructure/security/jwt-access-tokens.js';
 import { IdentityController } from './modules/identity/identity.controller.js';
 import { IdentityRepository } from './modules/identity/identity.repository.js';
 import { createIdentityRouter } from './modules/identity/identity.routes.js';
 import { IdentityService } from './modules/identity/identity.service.js';
-import { PasswordHasher } from './modules/identity/password-hasher.js';
+import { Argon2PasswordHasher } from './infrastructure/security/argon2-password-hasher.js';
 
-const accessTokens = new AccessTokenService({
+const accessTokens = new JwtAccessTokens({
   secret: environment.JWT_SECRET,
   issuer: environment.JWT_ISSUER,
   audience: environment.JWT_AUDIENCE,
@@ -833,12 +1179,15 @@ const accessTokens = new AccessTokenService({
 const identityRepository = new IdentityRepository(prisma);
 const identityService = new IdentityService(
   identityRepository,
-  new PasswordHasher(),
+  new Argon2PasswordHasher(),
   accessTokens,
   environment.JWT_ACCESS_TOKEN_TTL_SECONDS,
 );
-const identityRouter = createIdentityRouter(new IdentityController(identityService));
 const requireAuthenticatedUser = createRequireAuthenticatedUser(identityService);
+const identityRouter = createIdentityRouter(
+  new IdentityController(identityService),
+  requireAuthenticatedUser,
+);
 
 const communitiesRouter = createCommunitiesRouter(
   new CommunitiesController(communitiesService),
@@ -937,8 +1286,11 @@ Required changes:
 - replace every API/E2E `x-user-id` header with a real bearer token;
 - sign users in before starting reservation concurrency races;
 - keep repository integration tests using direct fixture IDs;
-- add identity API coverage for sign-up, sign-in, validation, duplicate
-  username, invalid credentials, inactive accounts, and rate limiting;
+- add identity API coverage for sign-up, sign-in, `GET /auth/me`, validation,
+  duplicate username, invalid credentials, inactive accounts, and both rate
+  limiters;
+- prove `/auth/me` returns the current database-backed user for a valid token
+  and returns 401 for missing, malformed, expired, or now-inactive users;
 - cover missing, malformed, forged, wrong-issuer, wrong-audience, and expired
   tokens;
 - prove an issued token stops working after account suspension;
@@ -1009,7 +1361,8 @@ The following tests are mandatory before completing the phase:
 4. Alice cannot read or cancel Bob's reservation by changing an ID or using a
    route intended for the current caller.
 5. An archived/suspended community is not manageable.
-6. A moderator cannot remove, suspend, ban, or demote the owner.
+6. If member management is exposed, a moderator cannot remove, suspend, ban,
+   or demote the owner.
 7. A user's valid token stops working after account suspension.
 
 Prefer 404 where revealing the existence of a private cross-community object
@@ -1023,61 +1376,25 @@ only join and leave. If Phase 4 adds `PATCH
 /api/communities/:communityId/members/:userId`, define and test the policy before
 wiring the route.
 
-Create `src/modules/memberships/membership-authorization.ts` as a pure domain
-rule:
+Do not add a standalone policy function or management types while that endpoint
+is absent. They would have no caller and would be speculative dead code.
 
-```ts
-import { AppError } from '../../shared/errors/app-error.js';
+The default Phase 4 path is therefore to defer member management and skip the
+rest of this step. The owner-protection invariant becomes mandatory when a
+member-management endpoint is actually introduced.
 
-type CommunityRole = 'MEMBER' | 'MODERATOR' | 'ORGANIZER' | 'OWNER';
-type MembershipStatus = 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'LEFT';
+If you intentionally include the endpoint now, implement it as one complete
+vertical slice using only the existing six membership files:
 
-interface ManagementActor {
-  id: string;
-  role: CommunityRole;
-  status: MembershipStatus;
-}
-
-interface ManagementTarget {
-  id: string;
-  role: CommunityRole;
-  status: MembershipStatus;
-}
-
-export interface MembershipChange {
-  role?: Exclude<CommunityRole, 'OWNER'>;
-  status?: Extract<MembershipStatus, 'ACTIVE' | 'SUSPENDED' | 'BANNED'>;
-}
-
-const rank: Record<CommunityRole, number> = {
-  MEMBER: 1,
-  MODERATOR: 2,
-  ORGANIZER: 3,
-  OWNER: 4,
-};
-
-export const assertCanManageMembership = (
-  actor: ManagementActor,
-  target: ManagementTarget,
-  change: MembershipChange,
-): void => {
-  if (actor.status !== 'ACTIVE' || !['OWNER', 'ORGANIZER', 'MODERATOR'].includes(actor.role)) {
-    throw new AppError(403, 'COMMUNITY_PERMISSION_DENIED', 'You cannot manage this member');
-  }
-  if (target.role === 'OWNER') {
-    throw new AppError(409, 'OWNER_PROTECTED', 'The community owner cannot be changed here');
-  }
-  if (actor.id === target.id) {
-    throw new AppError(409, 'SELF_MANAGEMENT_NOT_ALLOWED', 'Use the appropriate account action');
-  }
-  if (actor.role !== 'OWNER' && rank[actor.role] <= rank[target.role]) {
-    throw new AppError(403, 'COMMUNITY_PERMISSION_DENIED', 'You cannot manage this member');
-  }
-  if (change.role !== undefined && actor.role !== 'OWNER') {
-    throw new AppError(403, 'COMMUNITY_PERMISSION_DENIED', 'Only the owner can change roles');
-  }
-};
-```
+1. Add the request/response and policy shapes to `memberships.types.ts` and the
+   untrusted request validator to `memberships.schemas.ts`.
+2. Add the owner-safe authorization rule and management use case to
+   `memberships.service.ts`; the use case must call the rule.
+3. Add a repository operation that loads actor and target from the same
+   community and keeps authorization plus update inside one transaction.
+4. Add the controller method and protected route only after the transactional
+   use case exists.
+5. Add unit, repository/integration, and API tests in the same change.
 
 This intentionally does not transfer ownership. Add a separate, transactionally
 safe ownership-transfer use case only when the product needs it.
@@ -1096,27 +1413,15 @@ this authorization race, just as raw SQL remains justified for reservations.
 The service owns the policy; the repository owns transaction mechanics. Never
 ship the route with a non-atomic “read roles, later update” gap.
 
-Unit-test the pure policy with at least:
-
-```ts
-it('never lets a moderator act on the owner', () => {
-  expect(() =>
-    assertCanManageMembership(
-      { id: bobId, role: 'MODERATOR', status: 'ACTIVE' },
-      { id: aliceId, role: 'OWNER', status: 'ACTIVE' },
-      { status: 'BANNED' },
-    ),
-  ).toThrowError(expect.objectContaining({ code: 'OWNER_PROTECTED' }));
-});
-```
-
-Then add an API test where the moderator is valid in community A but the target
+The complete slice must include a unit test proving a moderator cannot act on
+the owner. Then add an API test where the moderator is valid in community A but the target
 owner ID belongs to community B. The exact-community query must return not found
 or denied and must not modify either membership.
 
-If member-management endpoints are intentionally deferred to Phase 5, do not
-create empty routes. Keep the policy requirement and its tests as an explicit
-Phase 4 completion blocker before those endpoints can be exposed.
+If member-management endpoints are deferred, do not create policy types,
+unused functions, empty routes, or placeholder tests in Phase 4. The skipped
+real-user MVP milestone and the new Phase 5 hardening work do not implicitly
+add this product feature; implement it only when explicitly requested.
 
 ## Step 17: Verify logging and HTTP security boundaries
 
@@ -1160,7 +1465,7 @@ suitable to delegate to AI, followed by a quick contract review.
 
 Required changes in `docs/openapi.yaml` and its module source files:
 
-- add `POST /auth/sign-up` and `POST /auth/sign-in`;
+- add `POST /auth/sign-up`, `POST /auth/sign-in`, and protected `GET /auth/me`;
 - add credential, public-user, and authentication-response schemas;
 - add an HTTP bearer `bearerAuth` security scheme;
 - apply bearer security to every protected operation;
@@ -1175,9 +1480,10 @@ Update README to remove temporary-header instructions, document JWT environment
 variables, describe sign-up/sign-in, state that refresh/recovery flows are
 deliberately absent, and link this handbook. Keep the no-email boundary.
 
-Then sign in as a development seed user and call one protected endpoint with
-`Authorization: Bearer <token>`. Do not save the real password or response token
-in documentation or shell history shared with others.
+Then sign in as a development seed user, call `GET /auth/me`, and call one
+protected domain endpoint with `Authorization: Bearer <token>`. Do not save the
+real password or response token in documentation or shell history shared with
+others.
 
 ## Step 20: Run security-focused failure drills
 
@@ -1284,7 +1590,8 @@ implementation:
 8. Why is CORS not authentication?
 9. Why is authentication middleware not the right place to authorize an event?
 10. How does the event query prevent cross-community organizer substitution?
-11. How is the community owner protected from a moderator?
+11. If member management was implemented, how is the community owner protected
+    from a moderator inside the same transaction as the update?
 12. Why does `/reservations/me` not accept a user ID from the client?
 13. Which identity queries use Prisma, and why do reservations still use raw
     `pg`?
@@ -1303,11 +1610,12 @@ Keep commits reviewable:
 
 1. `docs: add phase 4 minimal auth handbook`
 2. `db: add user credential and platform role fields`
-3. `feat: add argon2 and access token services`
+3. `feat: add argon2 and JWT security adapters`
 4. `feat: add sign-up and sign-in identity slice`
 5. `feat: replace temporary request user header with bearer auth`
 6. `test: migrate API and lifecycle tests to authenticated users`
-7. `test: add object-level authorization and owner protection cases`
+7. `test: add object-level authorization cases` (include owner protection only
+   when member management is implemented)
 8. `docs: document phase 4 auth contract and setup`
 
 Do not force this sequence if a smaller coherent set is safer, but keep schema,

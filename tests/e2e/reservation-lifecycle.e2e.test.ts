@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { aliceId, bobId } from '../fixtures/database.js';
 import { type PostgresHarness, startPostgresHarness } from '../helpers/postgres.js';
-import { createTestApp } from '../helpers/test-app.js';
+import { authorizationFor, createTestApp } from '../helpers/test-app.js';
 
 interface AttendanceResponse {
   data: { attendanceStatus: 'CONFIRMED' | 'WAITLISTED' };
@@ -36,7 +36,7 @@ describe('reservation lifecycle', () => {
 
     const community = await request(app)
       .post('/api/communities')
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .send({ name: 'Lifecycle Club', slug: 'lifecycle-club' });
     expect(community.status).toBe(201);
     const communityId = (community.body as { data: { id: string } }).data.id;
@@ -48,12 +48,12 @@ describe('reservation lifecycle', () => {
 
     const joined = await request(app)
       .post(`/api/communities/${communityId}/join`)
-      .set('x-user-id', bobId);
+      .set('authorization', authorizationFor(bobId));
     expect(joined.status).toBe(201);
 
     const event = await request(app)
       .post(`/api/communities/${communityId}/events`)
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .send({
         title: 'One Chair Workshop',
         slug: 'one-chair-workshop',
@@ -73,12 +73,12 @@ describe('reservation lifecycle', () => {
     const requests = await Promise.all([
       request(app)
         .post(`/api/events/${eventId}/reservations`)
-        .set('x-user-id', aliceId)
+        .set('authorization', authorizationFor(aliceId))
         .set('Idempotency-Key', 'lifecycle-alice')
         .send({}),
       request(app)
         .post(`/api/events/${eventId}/reservations`)
-        .set('x-user-id', bobId)
+        .set('authorization', authorizationFor(bobId))
         .set('Idempotency-Key', 'lifecycle-bob')
         .send({}),
     ]);
@@ -100,18 +100,18 @@ describe('reservation lifecycle', () => {
 
     const waitlistEntry = await request(app)
       .get(`/api/events/${eventId}/waitlist/me`)
-      .set('x-user-id', waitlistedUser);
+      .set('authorization', authorizationFor(waitlistedUser));
     expect(waitlistEntry.status).toBe(200);
     expect((waitlistEntry.body as { data: { status: string } }).data.status).toBe('WAITING');
 
     const cancelled = await request(app)
       .delete(`/api/events/${eventId}/reservations/me`)
-      .set('x-user-id', confirmedUser);
+      .set('authorization', authorizationFor(confirmedUser));
     expect(cancelled.status).toBe(204);
 
     const promoted = await request(app)
       .get(`/api/events/${eventId}/reservations/me`)
-      .set('x-user-id', waitlistedUser);
+      .set('authorization', authorizationFor(waitlistedUser));
     expect(promoted.status).toBe(200);
     expect((promoted.body as { data: { status: string } }).data.status).toBe('CONFIRMED');
 

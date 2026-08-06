@@ -10,6 +10,7 @@ module file together.
 
 ```text
 health/        Liveness and readiness endpoints
+identity/      Username/password authentication and current-user lookup
 communities/   Community creation, listing, and lookup
 memberships/   Join and leave transitions
 events/        Event creation and public reads

@@ -24,9 +24,32 @@ import { ReservationsController } from './modules/reservations/reservations.cont
 import { ReservationsRepository } from './modules/reservations/reservations.repository.js';
 import { createReservationsRouter } from './modules/reservations/reservations.routes.js';
 import { ReservationsService } from './modules/reservations/reservations.service.js';
+import { JwtAccessTokens } from './infrastructure/security/jwt-access-tokens.js';
+import { IdentityRepository } from './modules/identity/identity.repository.js';
+import { IdentityService } from './modules/identity/identity.service.js';
+import { Argon2PasswordHasher } from './infrastructure/security/argon2-password-hasher.js';
+import { createRequireAuthenticatedUser } from './shared/auth/authentication.middleware.js';
+import { createIdentityRouter } from './modules/identity/identity.routes.js';
+import { IdentityController } from './modules/identity/identity.controller.js';
+
+const pinoConfig = {
+  redact: {
+    paths: [
+      'req.headers.authorization',
+      'request.headers.authorization',
+      'headers.authorization',
+      'password',
+      '*.password',
+      '*.passwordHash',
+    ],
+    censor: '[REDACTED]',
+  },
+};
 
 const logger = pino(
-  environment.NODE_ENV === 'development' ? { transport: { target: 'pino-pretty' } } : {},
+  environment.NODE_ENV === 'development'
+    ? { ...pinoConfig, transport: { target: 'pino-pretty' } }
+    : pinoConfig,
 );
 
 const pool = createPool(environment);
@@ -36,22 +59,52 @@ pool.on('error', (error) => {
   logger.error({ err: error }, 'Idle PostgreSQL client failed');
 });
 
+const accessTokens = new JwtAccessTokens({
+  secret: environment.JWT_SECRET,
+  issuer: environment.JWT_ISSUER,
+  audience: environment.JWT_AUDIENCE,
+  ttlSeconds: environment.JWT_ACCESS_TOKEN_TTL_SECONDS,
+});
+
+const identityRepository = new IdentityRepository(prisma);
+const identityService = new IdentityService(
+  identityRepository,
+  new Argon2PasswordHasher(),
+  accessTokens,
+  environment.JWT_ACCESS_TOKEN_TTL_SECONDS,
+);
+const requireAuthenticatedUser = createRequireAuthenticatedUser(identityService);
+const identityRouter = createIdentityRouter(
+  new IdentityController(identityService),
+  requireAuthenticatedUser,
+);
+
 const communitiesRepository = new CommunitiesRepository(prisma);
 const communitiesService = new CommunitiesService(communitiesRepository);
-const communitiesRouter = createCommunitiesRouter(new CommunitiesController(communitiesService));
+const communitiesRouter = createCommunitiesRouter(
+  new CommunitiesController(communitiesService),
+  requireAuthenticatedUser,
+);
 
 const membershipsRepository = new MembershipsRepository(prisma);
 const membershipsService = new MembershipsService(membershipsRepository);
-const membershipsRouter = createMembershipsRouter(new MembershipsController(membershipsService));
+const membershipsRouter = createMembershipsRouter(
+  new MembershipsController(membershipsService),
+  requireAuthenticatedUser,
+);
 
 const eventsRepository = new EventsRepository(prisma);
 const eventsService = new EventsService(eventsRepository);
-const eventsRouter = createEventsRouter(new EventsController(eventsService));
+const eventsRouter = createEventsRouter(
+  new EventsController(eventsService),
+  requireAuthenticatedUser,
+);
 
 const reservationsRepository = new ReservationsRepository(pool);
 const reservationsService = new ReservationsService(reservationsRepository);
 const reservationsRouter = createReservationsRouter(
   new ReservationsController(reservationsService),
+  requireAuthenticatedUser,
 );
 
 const checkReadiness = async (): Promise<boolean> => {
@@ -73,6 +126,7 @@ const app = createApp({
   membershipsRouter,
   eventsRouter,
   reservationsRouter,
+  identityRouter,
 });
 
 const server = createServer(app);

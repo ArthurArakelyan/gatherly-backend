@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { aliceId, bobId, createCommunityFixture } from '../fixtures/database.js';
 import { type PostgresHarness, startPostgresHarness } from '../helpers/postgres.js';
-import { createTestApp } from '../helpers/test-app.js';
+import { authorizationFor, createTestApp } from '../helpers/test-app.js';
 
 describe('events API', () => {
   let harness: PostgresHarness;
@@ -37,13 +37,13 @@ describe('events API', () => {
 
     const forbidden = await request(app)
       .post(`/api/communities/${communityId}/events`)
-      .set('x-user-id', bobId)
+      .set('authorization', authorizationFor(bobId))
       .send(eventBody);
     expect(forbidden.status).toBe(403);
 
     const created = await request(app)
       .post(`/api/communities/${communityId}/events`)
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .send(eventBody);
     expect(created.status).toBe(201);
     const eventId = (created.body as { data: { id: string } }).data.id;

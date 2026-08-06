@@ -3,9 +3,9 @@ create:
     tags: [Events]
     summary: Create an event in a community
     description: Requires an active OWNER, ORGANIZER, or MODERATOR membership.
+    security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/CommunityId'
-      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
     requestBody:
       required: true
       content:
@@ -16,13 +16,9 @@ create:
         description: Event created.
         content:
           application/json:
-            schema:
-              type: object
-              required: [data]
-              properties:
-                data: { $ref: '../../openapi.yaml#/components/schemas/Event' }
+            schema: { $ref: '../../openapi.yaml#/components/schemas/EventResponse' }
       '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
-      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
       '403': { $ref: '../../openapi.yaml#/components/responses/Error' }
       '404': { $ref: '../../openapi.yaml#/components/responses/Error' }
       '409': { $ref: '../../openapi.yaml#/components/responses/Error' }
@@ -46,14 +42,7 @@ collection:
         description: Paginated public events.
         content:
           application/json:
-            schema:
-              type: object
-              required: [data, pagination]
-              properties:
-                data:
-                  type: array
-                  items: { $ref: '../../openapi.yaml#/components/schemas/Event' }
-                pagination: { $ref: '../../openapi.yaml#/components/schemas/Pagination' }
+            schema: { $ref: '../../openapi.yaml#/components/schemas/EventPage' }
       '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
 item:
   get:
@@ -66,10 +55,6 @@ item:
         description: Event returned.
         content:
           application/json:
-            schema:
-              type: object
-              required: [data]
-              properties:
-                data: { $ref: '../../openapi.yaml#/components/schemas/Event' }
+            schema: { $ref: '../../openapi.yaml#/components/schemas/EventResponse' }
       '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
       '404': { $ref: '../../openapi.yaml#/components/responses/Error' }

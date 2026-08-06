@@ -1,6 +1,6 @@
-import { AppError } from '../../shared/errors/app-error.js';
 import type { MembershipsRepository } from './memberships.repository.js';
 import type { JoinMembershipResult } from './memberships.types.js';
+import { AppError } from '../../shared/errors/app-error.js';
 
 export class MembershipsService {
   public constructor(private readonly repository: MembershipsRepository) {}

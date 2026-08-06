@@ -1,6 +1,6 @@
 import type { RequestHandler } from 'express';
 
-import { getRequestUserId } from '../../shared/http/request-user.middleware.js';
+import { getAuthenticatedUser } from '../../shared/auth/authentication.middleware.js';
 import { getValidated } from '../../shared/validation/validate.middleware.js';
 import type { CreateEventRequest, GetEventRequest, ListEventsRequest } from './events.schemas.js';
 import type { EventsService } from './events.service.js';
@@ -47,7 +47,11 @@ export class EventsController {
 
   public readonly create: RequestHandler = async (_request, response) => {
     const { body, params } = getValidated<CreateEventRequest>(response);
-    const event = await this.service.create(params.communityId, getRequestUserId(response), body);
+    const event = await this.service.create(
+      params.communityId,
+      getAuthenticatedUser(response).id,
+      body,
+    );
     response.status(201).json({ data: toEventDto(event) });
   };
 

@@ -11,9 +11,12 @@ datasource db {
 model User {
   id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   username        String                @unique(map: "users_username_key")
+  passwordHash    String                @map("password_hash")
   status          String                @default("ACTIVE")
+  platformRole    String                @default("USER") @map("platform_role")
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
+  lastLoginAt     DateTime?             @map("last_login_at") @db.Timestamptz(6)
   communitiesMade Community[]           @relation("CommunityCreator")
   eventsMade      Event[]               @relation("EventCreator")
   memberships     CommunityMembership[]
@@ -38,7 +41,7 @@ model Community {
   createdByUserId String                @map("created_by_user_id") @db.Uuid
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
-  creator         User                  @relation("CommunityCreator", fields: [createdByUserId], references: [id])
+  creator         User                  @relation("CommunityCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   memberships     CommunityMembership[]
   events          Event[]
 
@@ -55,8 +58,8 @@ model CommunityMembership {
   joinedAt    DateTime  @default(now()) @map("joined_at") @db.Timestamptz(6)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
-  community   Community @relation(fields: [communityId], references: [id])
-  user        User      @relation(fields: [userId], references: [id])
+  community   Community @relation(fields: [communityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([communityId, userId], map: "community_memberships_user_community_key")
   @@index([userId, communityId], map: "community_memberships_user_idx")
@@ -79,8 +82,8 @@ model Event {
   capacity        Int
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
-  community       Community       @relation(fields: [communityId], references: [id])
-  creator         User            @relation("EventCreator", fields: [createdByUserId], references: [id])
+  community       Community       @relation(fields: [communityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator         User            @relation("EventCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   reservations    Reservation[]
   waitlistEntries WaitlistEntry[]
 
@@ -100,8 +103,8 @@ model Reservation {
   cancellationReason String?   @map("cancellation_reason")
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
-  event              Event     @relation(fields: [eventId], references: [id])
-  user               User      @relation(fields: [userId], references: [id])
+  event              Event     @relation(fields: [eventId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user               User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([eventId, status], map: "reservations_event_status_idx")
   @@map("reservations")
@@ -117,8 +120,8 @@ model WaitlistEntry {
   cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(6)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
-  event       Event     @relation(fields: [eventId], references: [id])
-  user        User      @relation(fields: [userId], references: [id])
+  event       Event     @relation(fields: [eventId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("waitlist_entries")
 }
@@ -129,10 +132,10 @@ model Notification {
   type      String
   title     String
   message   String
-  data      Json      @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  data      Json      @default("{}") @db.JsonB
   readAt    DateTime? @map("read_at") @db.Timestamptz(6)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  user      User      @relation(fields: [userId], references: [id])
+  user      User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("notifications")
 }
@@ -147,7 +150,7 @@ model IdempotencyKey {
   responseBody   Json?     @map("response_body") @db.JsonB
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   completedAt    DateTime? @map("completed_at") @db.Timestamptz(6)
-  user           User      @relation(fields: [userId], references: [id])
+  user           User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([userId, scope, key], map: "idempotency_keys_user_scope_key_key")
   @@map("idempotency_keys")

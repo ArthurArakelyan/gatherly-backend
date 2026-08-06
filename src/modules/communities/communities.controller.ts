@@ -8,7 +8,7 @@ import {
   type listCommunitiesRequestSchema,
 } from './communities.schemas.js';
 import type { Community } from './communities.types.js';
-import { getRequestUserId } from '../../shared/http/request-user.middleware.js';
+import { getAuthenticatedUser } from '../../shared/auth/authentication.middleware.js';
 
 interface CommunityDto {
   id: string;
@@ -39,7 +39,7 @@ export class CommunitiesController {
 
   public readonly create: RequestHandler = async (_request, response) => {
     const { body } = getValidated<z.infer<typeof createCommunityRequestSchema>>(response);
-    const community = await this.service.create(getRequestUserId(response), body);
+    const community = await this.service.create(getAuthenticatedUser(response).id, body);
     response.status(201).json({ data: toCommunityDto(community) });
   };
 

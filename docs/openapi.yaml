@@ -2,491 +2,407 @@ openapi: 3.0.3
 info:
   title: Gatherly API
   version: 0.1.0
-  description: >
-    The implemented Phase 2 raw-SQL API. PostgreSQL is the durable source of
-    truth.
+  description: |
+    The implemented Phase 4 API. PostgreSQL is the durable source of truth.
 
-    `x-user-id` is development-only identity and is replaced by authentication
-    in Phase 4.
+    Identity is deliberately minimal: sign up or sign in with a username and
+    password, then send the returned JWT in `Authorization: Bearer <token>` for
+    protected endpoints. There is no development-only identity header.
 servers:
   - url: http://localhost:3000
 tags:
   - name: Health
     description: Process liveness and PostgreSQL readiness checks.
+  - name: Identity
+    description: Minimal username/password authentication.
   - name: Communities
-    description: Public community discovery and community creation.
+    description: Public community discovery and authenticated community creation.
   - name: Memberships
-    description: Joining and leaving community membership.
+    description: Authenticated community join and leave operations.
   - name: Events
-    description: Event creation and public event discovery.
+    description: Public event discovery and authorized event creation.
   - name: Reservations
-    description: Capacity-safe reservations, waitlists, cancellation, and idempotency.
+    description: Authenticated, capacity-safe reservations, waitlists, cancellation, and idempotency.
 paths:
   /health/live:
     get:
-      tags:
-        - Health
+      tags: [Health]
       summary: Check whether the HTTP process is alive
       responses:
-        "200":
+        '200':
           description: Process is alive.
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
-              example:
-                status: ok
+              schema: { $ref: '#/components/schemas/Health' }
+              example: { status: ok }
   /health/ready:
     get:
-      tags:
-        - Health
+      tags: [Health]
       summary: Check whether PostgreSQL is reachable
       responses:
-        "200":
+        '200':
           description: PostgreSQL is reachable.
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
-              example:
-                status: ready
-        "503":
+              schema: { $ref: '#/components/schemas/Health' }
+              example: { status: ready }
+        '503':
           description: PostgreSQL is unavailable.
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
-              example:
-                status: not_ready
+              schema: { $ref: '#/components/schemas/Health' }
+              example: { status: not_ready }
+  /auth/sign-up:
+    post:
+      tags: [Identity]
+      summary: Create an account and issue an access token
+      description: |
+        Limited to 5 requests per IP per hour. Successful responses include
+        standard `RateLimit-*` response headers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Credentials' }
+      responses:
+        '201':
+          description: Account created and authenticated.
+          headers:
+            RateLimit-Limit: { $ref: '#/components/headers/RateLimitLimit' }
+            RateLimit-Remaining: { $ref: '#/components/headers/RateLimitRemaining' }
+            RateLimit-Reset: { $ref: '#/components/headers/RateLimitReset' }
+            RateLimit-Policy: { $ref: '#/components/headers/RateLimitPolicy' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthenticationResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/UsernameTaken' }
+        '429': { $ref: '#/components/responses/SignUpRateLimited' }
+  /auth/sign-in:
+    post:
+      tags: [Identity]
+      summary: Sign in and issue an access token
+      description: |
+        Limited to 10 requests per IP per 15 minutes. The same `401` response
+        is returned for an unknown username and an incorrect password.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Credentials' }
+      responses:
+        '200':
+          description: Authenticated successfully.
+          headers:
+            RateLimit-Limit: { $ref: '#/components/headers/RateLimitLimit' }
+            RateLimit-Remaining: { $ref: '#/components/headers/RateLimitRemaining' }
+            RateLimit-Reset: { $ref: '#/components/headers/RateLimitReset' }
+            RateLimit-Policy: { $ref: '#/components/headers/RateLimitPolicy' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthenticationResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/InvalidCredentials' }
+        '403': { $ref: '#/components/responses/AccountInactive' }
+        '429': { $ref: '#/components/responses/SignInRateLimited' }
+  /auth/me:
+    get:
+      tags: [Identity]
+      summary: Get the currently authenticated user
+      description: Returns the active user loaded while validating the bearer token.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Current authenticated user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUserResponse' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
   /api/communities:
     get:
-      tags:
-        - Communities
+      tags: [Communities]
       summary: List active public communities
       parameters:
-        - $ref: "#/components/parameters/Page"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "200":
+        '200':
           description: Paginated communities.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                  - pagination
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Community"
-                  pagination:
-                    $ref: "#/components/schemas/Pagination"
-        "400":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/CommunityPage' }
+        '400': { $ref: '#/components/responses/Error' }
     post:
-      tags:
-        - Communities
+      tags: [Communities]
       summary: Create a community and an OWNER membership for the caller
-      parameters:
-        - $ref: "#/components/parameters/RequestUserId"
+      security: [{ bearerAuth: [] }]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/CreateCommunity"
+            schema: { $ref: '#/components/schemas/CreateCommunity' }
       responses:
-        "201":
+        '201':
           description: Community created.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                properties:
-                  data:
-                    $ref: "#/components/schemas/Community"
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/CommunityResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '409': { $ref: '#/components/responses/Error' }
   /api/communities/{communityId}:
     get:
-      tags:
-        - Communities
+      tags: [Communities]
       summary: Get an active community
       parameters:
-        - $ref: "#/components/parameters/CommunityId"
+        - $ref: '#/components/parameters/CommunityId'
       responses:
-        "200":
+        '200':
           description: Community returned.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                properties:
-                  data:
-                    $ref: "#/components/schemas/Community"
-        "400":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/CommunityResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /api/communities/{communityId}/join:
     post:
-      tags:
-        - Memberships
+      tags: [Memberships]
       summary: Join an open community
+      security: [{ bearerAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/CommunityId"
-        - $ref: "#/components/parameters/RequestUserId"
+        - $ref: '#/components/parameters/CommunityId'
       responses:
-        "200":
+        '200':
           description: Caller was already an active member.
-        "201":
+          content:
+            {
+              application/json:
+                { schema: { $ref: '#/components/schemas/MembershipStatusResponse' } },
+            }
+        '201':
           description: Membership created.
-        "401":
-          $ref: "#/components/responses/Error"
-        "403":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
+          content:
+            {
+              application/json:
+                { schema: { $ref: '#/components/schemas/MembershipStatusResponse' } },
+            }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /api/communities/{communityId}/leave:
     post:
-      tags:
-        - Memberships
+      tags: [Memberships]
       summary: Leave a community while retaining membership history
+      security: [{ bearerAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/CommunityId"
-        - $ref: "#/components/parameters/RequestUserId"
+        - $ref: '#/components/parameters/CommunityId'
       responses:
-        "204":
-          description: Membership transitioned to LEFT.
-        "401":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
+        '204': { description: Membership transitioned to LEFT. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /api/communities/{communityId}/events:
     post:
-      tags:
-        - Events
+      tags: [Events]
       summary: Create an event in a community
       description: Requires an active OWNER, ORGANIZER, or MODERATOR membership.
+      security: [{ bearerAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/CommunityId"
-        - $ref: "#/components/parameters/RequestUserId"
+        - $ref: '#/components/parameters/CommunityId'
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/CreateEvent"
+            schema: { $ref: '#/components/schemas/CreateEvent' }
       responses:
-        "201":
+        '201':
           description: Event created.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                properties:
-                  data:
-                    $ref: "#/components/schemas/Event"
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-        "403":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/EventResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /api/events:
     get:
-      tags:
-        - Events
+      tags: [Events]
       summary: List public published, cancelled, or completed events
       parameters:
-        - name: communityId
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: status
-          in: query
-          schema:
-            type: string
-            enum:
-              - PUBLISHED
-              - CANCELLED
-              - COMPLETED
-        - name: startsAfter
-          in: query
-          schema:
-            type: string
-            format: date-time
-        - name: startsBefore
-          in: query
-          schema:
-            type: string
-            format: date-time
-        - $ref: "#/components/parameters/Page"
-        - $ref: "#/components/parameters/Limit"
+        - { name: communityId, in: query, schema: { type: string, format: uuid } }
+        - {
+            name: status,
+            in: query,
+            schema: { type: string, enum: [PUBLISHED, CANCELLED, COMPLETED] },
+          }
+        - { name: startsAfter, in: query, schema: { type: string, format: date-time } }
+        - { name: startsBefore, in: query, schema: { type: string, format: date-time } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "200":
+        '200':
           description: Paginated public events.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                  - pagination
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Event"
-                  pagination:
-                    $ref: "#/components/schemas/Pagination"
-        "400":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/EventPage' }
+        '400': { $ref: '#/components/responses/Error' }
   /api/events/{eventId}:
     get:
-      tags:
-        - Events
+      tags: [Events]
       summary: Get a public event
       parameters:
-        - $ref: "#/components/parameters/EventId"
+        - $ref: '#/components/parameters/EventId'
       responses:
-        "200":
+        '200':
           description: Event returned.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                properties:
-                  data:
-                    $ref: "#/components/schemas/Event"
-        "400":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/EventResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /api/events/{eventId}/reservations:
     post:
-      tags:
-        - Reservations
+      tags: [Reservations]
       summary: Confirm a reservation or add the caller to the waitlist
-      description: >
-        Requires an active community membership and an Idempotency-Key. Reusing
-        the
-
-        same key returns the stored original outcome and creates no duplicate
-        effect.
+      description: |
+        Requires an active community membership and an `Idempotency-Key`.
+        Reusing a completed key returns its original outcome; an in-progress or
+        differently reused key is rejected.
+      security: [{ bearerAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/EventId"
-        - $ref: "#/components/parameters/RequestUserId"
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: '#/components/parameters/EventId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        "201":
+        '201':
           description: The caller was confirmed or waitlisted.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                properties:
-                  data:
-                    oneOf:
-                      - $ref: "#/components/schemas/ConfirmedOutcome"
-                      - $ref: "#/components/schemas/WaitlistedOutcome"
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-        "403":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/ReservationOutcomeResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /api/events/{eventId}/reservations/me:
     get:
-      tags:
-        - Reservations
+      tags: [Reservations]
       summary: Get the caller's active confirmed reservation
+      security: [{ bearerAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/EventId"
-        - $ref: "#/components/parameters/RequestUserId"
+        - $ref: '#/components/parameters/EventId'
       responses:
-        "200":
+        '200':
           description: Active reservation returned.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                properties:
-                  data:
-                    $ref: "#/components/schemas/Reservation"
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/ReservationResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '404': { $ref: '#/components/responses/Error' }
     delete:
-      tags:
-        - Reservations
+      tags: [Reservations]
       summary: Cancel the caller's reservation and promote at most one waiting user
+      security: [{ bearerAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/EventId"
-        - $ref: "#/components/parameters/RequestUserId"
+        - $ref: '#/components/parameters/EventId'
       responses:
-        "204":
-          description: Reservation cancelled and promotion committed
-          if applicable.: null
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
+        '204': { description: Reservation cancelled and promotion committed if applicable. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '404': { $ref: '#/components/responses/Error' }
   /api/events/{eventId}/waitlist/me:
     get:
-      tags:
-        - Reservations
+      tags: [Reservations]
       summary: Get the caller's active waitlist entry
+      security: [{ bearerAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/EventId"
-        - $ref: "#/components/parameters/RequestUserId"
+        - $ref: '#/components/parameters/EventId'
       responses:
-        "200":
+        '200':
           description: Active waiting entry returned.
           content:
             application/json:
-              schema:
-                type: object
-                required:
-                  - data
-                properties:
-                  data:
-                    $ref: "#/components/schemas/WaitlistEntry"
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
+              schema: { $ref: '#/components/schemas/WaitlistEntryResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '404': { $ref: '#/components/responses/Error' }
     delete:
-      tags:
-        - Reservations
+      tags: [Reservations]
       summary: Cancel the caller's waitlist entry
+      security: [{ bearerAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/EventId"
-        - $ref: "#/components/parameters/RequestUserId"
+        - $ref: '#/components/parameters/EventId'
       responses:
-        "204":
-          description: Waitlist entry cancelled.
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
+        '204': { description: Waitlist entry cancelled. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '404': { $ref: '#/components/responses/Error' }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token returned by `/auth/sign-up` or `/auth/sign-in`.
   parameters:
     CommunityId:
       name: communityId
       in: path
       required: true
-      schema:
-        type: string
-        format: uuid
+      schema: { type: string, format: uuid }
     EventId:
       name: eventId
       in: path
       required: true
-      schema:
-        type: string
-        format: uuid
-    RequestUserId:
-      name: x-user-id
-      in: header
-      required: true
-      description: Development-only request identity; not authentication.
-      schema:
-        type: string
-        format: uuid
-      example: 00000000-0000-4000-8000-000000000001
+      schema: { type: string, format: uuid }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
-      description: Client-generated unique key for one reservation intent.
-      schema:
-        type: string
-        minLength: 1
-        maxLength: 200
+      description: Client-generated key for one reservation intent.
+      schema: { type: string, minLength: 1, maxLength: 200 }
       example: reserve-3af4d1c5-251b-4d41-a3a4-4f1f6dd2a1a7
     Page:
       name: page
       in: query
-      schema:
-        type: integer
-        minimum: 1
-        default: 1
+      schema: { type: integer, minimum: 1, default: 1 }
     Limit:
       name: limit
       in: query
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 100
-        default: 20
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  headers:
+    RateLimitLimit:
+      description: Maximum allowed requests in the current rate-limit window.
+      schema: { type: integer, minimum: 0 }
+    RateLimitRemaining:
+      description: Requests remaining in the current rate-limit window.
+      schema: { type: integer, minimum: 0 }
+    RateLimitReset:
+      description: Seconds until the rate-limit window resets.
+      schema: { type: integer, minimum: 0 }
+    RateLimitPolicy:
+      description: Applied rate-limit policy.
+      schema: { type: string }
   schemas:
     Health:
       type: object
-      required:
-        - status
-      properties:
-        status:
-          type: string
+      required: [status]
+      properties: { status: { type: string } }
     Error:
       type: object
-      required:
-        - error
+      required: [error]
       properties:
         error:
           type: object
-          required:
-            - code
-            - message
-            - requestId
+          required: [code, message, requestId]
           properties:
-            code:
-              type: string
-            message:
-              type: string
-            requestId:
-              type: string
-              format: uuid
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string, format: uuid }
             details: {}
       example:
         error:
@@ -496,329 +412,253 @@ components:
           details:
             issues:
               - path: body.capacity
-                message: "Too small: expected number to be >0"
+                message: 'Too small: expected number to be >0'
+    Credentials:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          pattern: '^[a-z0-9_]{3,30}$'
+          description: Trimmed and lower-cased before validation.
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 12
+          maxLength: 128
+      example: { username: alice, password: correct-horse-battery-staple }
+    PublicUser:
+      type: object
+      required: [id, username, status, platformRole, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, DELETED] }
+        platformRole: { type: string, enum: [USER, PLATFORM_MODERATOR, PLATFORM_ADMIN] }
+        createdAt: { type: string, format: date-time }
+    AuthenticationResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [user, accessToken, tokenType, expiresIn]
+          properties:
+            user: { $ref: '#/components/schemas/PublicUser' }
+            accessToken: { type: string, description: JWT access token. }
+            tokenType: { type: string, enum: [Bearer] }
+            expiresIn: { type: integer, minimum: 1, description: Token lifetime in seconds. }
+    CurrentUserResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [user]
+          properties: { user: { $ref: '#/components/schemas/PublicUser' } }
     Community:
       type: object
-      required:
-        - id
-        - name
-        - slug
-        - description
-        - city
-        - country
-        - createdByUserId
-        - createdAt
-        - updatedAt
+      required: [id, name, slug, description, city, country, createdByUserId, createdAt, updatedAt]
       properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        slug:
-          type: string
-        description:
-          type: string
-        city:
-          type: string
-          nullable: true
-        country:
-          type: string
-          nullable: true
-        createdByUserId:
-          type: string
-          format: uuid
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-      example:
-        id: 8e3cbca7-8f4c-45af-bbb5-6318274c7a3b
-        name: Moscow Board Games
-        slug: moscow-board-games
-        description: Weekly friendly board-game sessions.
-        city: Moscow
-        country: RU
-        createdByUserId: 00000000-0000-4000-8000-000000000001
-        createdAt: 2030-08-01T12:00:00.000Z
-        updatedAt: 2030-08-01T12:00:00.000Z
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        city: { type: string, nullable: true }
+        country: { type: string, nullable: true }
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CommunityResponse:
+      type: object
+      required: [data]
+      properties: { data: { $ref: '#/components/schemas/Community' } }
+    CommunityPage:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Community' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
     CreateCommunity:
       type: object
       additionalProperties: false
-      required:
-        - name
-        - slug
+      required: [name, slug]
       properties:
-        name:
-          type: string
-          minLength: 3
-          maxLength: 100
-        slug:
-          type: string
-          pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
-        description:
-          type: string
-          maxLength: 2000
-          default: ""
-        city:
-          type: string
-          minLength: 1
-          maxLength: 100
-        country:
-          type: string
-          minLength: 2
-          maxLength: 100
-      example:
-        name: Moscow Board Games
-        slug: moscow-board-games
-        description: Weekly friendly board-game sessions.
-        city: Moscow
-        country: RU
+        name: { type: string, minLength: 3, maxLength: 100 }
+        slug: { type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }
+        description: { type: string, maxLength: 2000, default: '' }
+        city: { type: string, minLength: 1, maxLength: 100 }
+        country: { type: string, minLength: 2, maxLength: 100 }
+    MembershipStatusResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [status]
+          properties: { status: { type: string, enum: [ACTIVE] } }
     Event:
       type: object
       required:
-        - id
-        - communityId
-        - createdByUserId
-        - title
-        - slug
-        - description
-        - format
-        - status
-        - visibility
-        - startsAt
-        - endsAt
-        - timezone
-        - capacity
-        - createdAt
-        - updatedAt
+        [
+          id,
+          communityId,
+          createdByUserId,
+          title,
+          slug,
+          description,
+          format,
+          status,
+          visibility,
+          startsAt,
+          endsAt,
+          timezone,
+          capacity,
+          createdAt,
+          updatedAt,
+        ]
       properties:
-        id:
-          type: string
-          format: uuid
-        communityId:
-          type: string
-          format: uuid
-        createdByUserId:
-          type: string
-          format: uuid
-        title:
-          type: string
-        slug:
-          type: string
-        description:
-          type: string
-        format:
-          type: string
-          enum:
-            - IN_PERSON
-            - ONLINE
-            - HYBRID
-        status:
-          type: string
-          enum:
-            - PUBLISHED
-            - CANCELLED
-            - COMPLETED
-        visibility:
-          type: string
-          enum:
-            - PUBLIC
-            - COMMUNITY_ONLY
-            - INVITE_ONLY
-        startsAt:
-          type: string
-          format: date-time
-        endsAt:
-          type: string
-          format: date-time
-        timezone:
-          type: string
-        capacity:
-          type: integer
-          minimum: 1
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-      example:
-        id: 7cb66570-cc92-4f3d-8a61-043b3dc39e77
-        communityId: 8e3cbca7-8f4c-45af-bbb5-6318274c7a3b
-        createdByUserId: 00000000-0000-4000-8000-000000000001
-        title: Learn Azul
-        slug: learn-azul
-        description: A beginner-friendly game night.
-        format: IN_PERSON
-        status: PUBLISHED
-        visibility: PUBLIC
-        startsAt: 2030-08-03T18:00:00.000Z
-        endsAt: 2030-08-03T21:00:00.000Z
-        timezone: Europe/Moscow
-        capacity: 12
-        createdAt: 2030-08-01T12:00:00.000Z
-        updatedAt: 2030-08-01T12:00:00.000Z
+        id: { type: string, format: uuid }
+        communityId: { type: string, format: uuid }
+        createdByUserId: { type: string, format: uuid }
+        title: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        format: { type: string, enum: [IN_PERSON, ONLINE, HYBRID] }
+        status: { type: string, enum: [PUBLISHED, CANCELLED, COMPLETED] }
+        visibility: { type: string, enum: [PUBLIC, COMMUNITY_ONLY, INVITE_ONLY] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        timezone: { type: string }
+        capacity: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    EventResponse:
+      type: object
+      required: [data]
+      properties: { data: { $ref: '#/components/schemas/Event' } }
+    EventPage:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Event' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
     CreateEvent:
       type: object
       additionalProperties: false
-      required:
-        - title
-        - slug
-        - startsAt
-        - endsAt
-        - timezone
-        - capacity
+      required: [title, slug, startsAt, endsAt, timezone, capacity]
       properties:
-        title:
-          type: string
-          minLength: 3
-          maxLength: 150
-        slug:
-          type: string
-          pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
-        description:
-          type: string
-          maxLength: 10000
-          default: ""
-        format:
-          type: string
-          enum:
-            - IN_PERSON
-            - ONLINE
-            - HYBRID
-          default: IN_PERSON
-        visibility:
-          type: string
-          enum:
-            - PUBLIC
-            - COMMUNITY_ONLY
-            - INVITE_ONLY
-          default: PUBLIC
-        startsAt:
-          type: string
-          format: date-time
-        endsAt:
-          type: string
-          format: date-time
+        title: { type: string, minLength: 3, maxLength: 150 }
+        slug: { type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }
+        description: { type: string, maxLength: 10000, default: '' }
+        format: { type: string, enum: [IN_PERSON, ONLINE, HYBRID], default: IN_PERSON }
+        visibility: { type: string, enum: [PUBLIC, COMMUNITY_ONLY, INVITE_ONLY], default: PUBLIC }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time, description: Must be later than startsAt. }
         timezone:
-          type: string
-          example: Europe/Moscow
-        capacity:
-          type: integer
-          minimum: 1
-      example:
-        title: Learn Azul
-        slug: learn-azul
-        description: A beginner-friendly game night.
-        format: IN_PERSON
-        visibility: PUBLIC
-        startsAt: 2030-08-03T18:00:00.000Z
-        endsAt: 2030-08-03T21:00:00.000Z
-        timezone: Europe/Moscow
-        capacity: 12
+          {
+            type: string,
+            minLength: 1,
+            maxLength: 100,
+            description: Valid IANA time-zone identifier.,
+          }
+        capacity: { type: integer, minimum: 1 }
     Pagination:
       type: object
-      required:
-        - page
-        - limit
-        - total
+      required: [page, limit, total]
       properties:
-        page:
-          type: integer
-          minimum: 1
-        limit:
-          type: integer
-          minimum: 1
-        total:
-          type: integer
-          minimum: 0
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1 }
+        total: { type: integer, minimum: 0 }
+    ReservationOutcomeResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/ConfirmedOutcome'
+            - $ref: '#/components/schemas/WaitlistedOutcome'
     ConfirmedOutcome:
       type: object
-      required:
-        - attendanceStatus
-        - reservationId
+      required: [attendanceStatus, reservationId]
       properties:
-        attendanceStatus:
-          enum:
-            - CONFIRMED
-        reservationId:
-          type: string
-          format: uuid
-      example:
-        attendanceStatus: CONFIRMED
-        reservationId: 91723303-6859-45fa-a2fe-1633835f3dac
+        attendanceStatus: { type: string, enum: [CONFIRMED] }
+        reservationId: { type: string, format: uuid }
     WaitlistedOutcome:
       type: object
-      required:
-        - attendanceStatus
-        - waitlistEntryId
-        - position
+      required: [attendanceStatus, waitlistEntryId, position]
       properties:
-        attendanceStatus:
-          enum:
-            - WAITLISTED
-        waitlistEntryId:
-          type: string
-          format: uuid
-        position:
-          type: integer
-          minimum: 1
-      example:
-        attendanceStatus: WAITLISTED
-        waitlistEntryId: f9c94bc2-2387-44b6-b34f-d4a440493252
-        position: 1
+        attendanceStatus: { type: string, enum: [WAITLISTED] }
+        waitlistEntryId: { type: string, format: uuid }
+        position: { type: integer, minimum: 1 }
+    ReservationResponse:
+      type: object
+      required: [data]
+      properties: { data: { $ref: '#/components/schemas/Reservation' } }
     Reservation:
       type: object
-      required:
-        - id
-        - status
-        - reservedAt
+      required: [id, status, reservedAt]
       properties:
-        id:
-          type: string
-          format: uuid
-        status:
-          enum:
-            - CONFIRMED
-        reservedAt:
-          type: string
-          format: date-time
-      example:
-        id: 91723303-6859-45fa-a2fe-1633835f3dac
-        status: CONFIRMED
-        reservedAt: 2030-08-01T12:15:00.000Z
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [CONFIRMED] }
+        reservedAt: { type: string, format: date-time }
+    WaitlistEntryResponse:
+      type: object
+      required: [data]
+      properties: { data: { $ref: '#/components/schemas/WaitlistEntry' } }
     WaitlistEntry:
       type: object
-      required:
-        - id
-        - status
-        - joinedAt
-        - position
+      required: [id, status, joinedAt, position]
       properties:
-        id:
-          type: string
-          format: uuid
-        status:
-          enum:
-            - WAITING
-        joinedAt:
-          type: string
-          format: date-time
-        position:
-          type: integer
-          minimum: 1
-      example:
-        id: f9c94bc2-2387-44b6-b34f-d4a440493252
-        status: WAITING
-        joinedAt: 2030-08-01T12:16:00.000Z
-        position: 1
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [WAITING] }
+        joinedAt: { type: string, format: date-time }
+        position: { type: integer, minimum: 1 }
   responses:
     Error:
       description: Safe machine-readable error response.
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
+          schema: { $ref: '#/components/schemas/Error' }
+    AuthenticationRequired:
+      description: A bearer token is missing, malformed, expired, invalid, or belongs to a non-active/deleted user (`AUTHENTICATION_REQUIRED`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UsernameTaken:
+      description: Username is already unavailable (`USERNAME_TAKEN`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InvalidCredentials:
+      description: Credentials are invalid (`INVALID_CREDENTIALS`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    AccountInactive:
+      description: Account is not active (`ACCOUNT_INACTIVE`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SignUpRateLimited:
+      description: Sign-up rate limit exceeded (`SIGN_UP_RATE_LIMITED`).
+      headers:
+        RateLimit-Limit: { $ref: '#/components/headers/RateLimitLimit' }
+        RateLimit-Remaining: { $ref: '#/components/headers/RateLimitRemaining' }
+        RateLimit-Reset: { $ref: '#/components/headers/RateLimitReset' }
+        RateLimit-Policy: { $ref: '#/components/headers/RateLimitPolicy' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SignInRateLimited:
+      description: Sign-in rate limit exceeded (`SIGN_IN_RATE_LIMITED`).
+      headers:
+        RateLimit-Limit: { $ref: '#/components/headers/RateLimitLimit' }
+        RateLimit-Remaining: { $ref: '#/components/headers/RateLimitRemaining' }
+        RateLimit-Reset: { $ref: '#/components/headers/RateLimitReset' }
+        RateLimit-Policy: { $ref: '#/components/headers/RateLimitPolicy' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

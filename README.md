@@ -203,13 +203,12 @@ override bind-mounts the source and enables polling so file watching works
 reliably through Docker Desktop. Plain `docker compose up --build` runs the
 immutable production-style image, where source edits require rebuilding.
 
-The current Phase 2 API exposes `GET /health/live`, `GET /health/ready`,
-communities, memberships, public events, reservations, and waitlists. Its full
-implemented contract is in [`docs/openapi.yaml`](./docs/openapi.yaml). It is
-assembled from module-specific files under [`docs/openapi/`](./docs/openapi/).
-The
-development-only `x-user-id` header is temporary; Phase 4 replaces it with real
-authentication.
+The current API exposes `GET /health/live`, `GET /health/ready`, minimal
+username/password identity endpoints, communities, memberships, public events,
+reservations, and waitlists. Protected endpoints require a JWT in the
+`Authorization: Bearer <token>` header. The full implemented contract is in
+[`docs/openapi.yaml`](./docs/openapi.yaml), assembled from module-specific files
+under [`docs/openapi/`](./docs/openapi/).
 
 ### Available scripts
 
@@ -432,9 +431,10 @@ Primary endpoints:
 ```text
 POST /auth/sign-up
 POST /auth/sign-in
+GET  /auth/me
 ```
 
-Use username/password credentials, hash passwords securely, and issue a simple JWT (or similarly small session mechanism) sufficient to authenticate protected APIs. Keep basic input validation and login rate limiting, but do not turn authentication into a major project module. Authorization remains important: community roles, ownership, bans, and object-level access checks are core Gatherly lessons even though account authentication is deliberately simple.
+Use username/password credentials, hash passwords securely, and issue a simple JWT (or similarly small session mechanism) sufficient to authenticate protected APIs. Rate-limit sign-up separately from sign-in: the former protects hashing resources and durable account creation, while the latter limits credential guessing. `GET /auth/me` returns the current active user loaded while authenticating the bearer token. Do not turn authentication into a major project module. Authorization remains important: community roles, ownership, bans, and object-level access checks are core Gatherly lessons even though account authentication is deliberately simple.
 
 ### Profiles and interests
 
@@ -678,17 +678,20 @@ Add only username/password sign-up and sign-in plus the small token/session mech
 Follow the detailed, build-it-yourself guide in
 [`PHASE_4_MINIMAL_AUTH_HANDBOOK.md`](./PHASE_4_MINIMAL_AUTH_HANDBOOK.md).
 
-### 5. First usable MVP and deployment
+### Skipped milestone: real-user MVP and deployment
 
-Finish accounts, profiles, communities, membership, events, reservations, waitlists, announcements, in-app notifications, PostgreSQL search, and a mobile-friendly frontend. Deploy to a small real group and collect feedback before adding advanced infrastructure.
+The former Phase 5 asked for a complete frontend, a deployment to a small real group, and feedback from real users. Gatherly is intentionally a pet/learning project, so that milestone is skipped rather than treated as a gate. Product modules that are not already required by the current backend flow remain deferred until explicitly requested.
 
-### 6. Container hardening and serious tests
+### 5. Container hardening and serious behavioral tests
 
 Improve the Phase 1 containers with production-oriented multi-stage builds, tighter non-root execution, secret handling, image caching, graceful draining, and safe migration handling.
 
-Use unit, integration, API, and end-to-end tests. Test concurrency, repeated idempotency keys, mid-transaction failure, dependency outages, duplicate messages, permission loss during a socket, and shutdown during active requests.
+Use unit, integration, API, end-to-end, and process-level tests. Test concurrency, repeated idempotency keys, mid-transaction failure, authentication revocation, object-level authorization, PostgreSQL outages, and shutdown during active requests. Duplicate-message and live-connection tests remain deferred until those technologies exist.
 
-### 7. Performance and advanced infrastructure
+Follow the planning and implementation guide in
+[`PHASE_5_CONTAINER_HARDENING_TESTING_HANDBOOK.md`](./PHASE_5_CONTAINER_HARDENING_TESTING_HANDBOOK.md).
+
+### 6. Performance and advanced infrastructure
 
 Add each technology only when there is a demonstrated lesson or product need:
 

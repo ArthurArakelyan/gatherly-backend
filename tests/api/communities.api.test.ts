@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { aliceId } from '../fixtures/database.js';
 import { type PostgresHarness, startPostgresHarness } from '../helpers/postgres.js';
-import { createTestApp } from '../helpers/test-app.js';
+import { authorizationFor, createTestApp } from '../helpers/test-app.js';
 
 describe('communities API', () => {
   let harness: PostgresHarness;
@@ -27,14 +27,14 @@ describe('communities API', () => {
   it('validates, creates, lists, and retrieves communities', async () => {
     const invalid = await request(app)
       .post('/api/communities')
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .send({ name: 'x', slug: 'not valid' });
     expect(invalid.status).toBe(400);
     expect((invalid.body as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
 
     const created = await request(app)
       .post('/api/communities')
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .send({ name: 'Chess Club', slug: 'chess-club' });
     expect(created.status).toBe(201);
     expect(created.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);

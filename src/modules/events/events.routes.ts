@@ -1,6 +1,5 @@
-import { Router } from 'express';
+import { type RequestHandler, Router } from 'express';
 
-import { requireRequestUser } from '../../shared/http/request-user.middleware.js';
 import { validate } from '../../shared/validation/validate.middleware.js';
 import type { EventsController } from './events.controller.js';
 import {
@@ -9,11 +8,14 @@ import {
   listEventsRequestSchema,
 } from './events.schemas.js';
 
-export const createEventsRouter = (controller: EventsController): Router => {
+export const createEventsRouter = (
+  controller: EventsController,
+  requireAuthenticatedUser: RequestHandler,
+): Router => {
   const router = Router();
   router.post(
     '/communities/:communityId/events',
-    requireRequestUser,
+    requireAuthenticatedUser,
     validate(createEventRequestSchema),
     controller.create,
   );

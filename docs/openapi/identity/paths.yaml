@@ -1,0 +1,61 @@
+signUp:
+  post:
+    tags: [Identity]
+    summary: Create an account and issue an access token
+    description: Limited to 5 requests per IP per hour.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../../openapi.yaml#/components/schemas/Credentials' }
+    responses:
+      '201':
+        description: Account created and authenticated.
+        headers:
+          RateLimit-Limit: { $ref: '../../openapi.yaml#/components/headers/RateLimitLimit' }
+          RateLimit-Remaining: { $ref: '../../openapi.yaml#/components/headers/RateLimitRemaining' }
+          RateLimit-Reset: { $ref: '../../openapi.yaml#/components/headers/RateLimitReset' }
+          RateLimit-Policy: { $ref: '../../openapi.yaml#/components/headers/RateLimitPolicy' }
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/AuthenticationResponse' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '409': { $ref: '../../openapi.yaml#/components/responses/UsernameTaken' }
+      '429': { $ref: '../../openapi.yaml#/components/responses/SignUpRateLimited' }
+signIn:
+  post:
+    tags: [Identity]
+    summary: Sign in and issue an access token
+    description: Limited to 10 requests per IP per 15 minutes.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../../openapi.yaml#/components/schemas/Credentials' }
+    responses:
+      '200':
+        description: Authenticated successfully.
+        headers:
+          RateLimit-Limit: { $ref: '../../openapi.yaml#/components/headers/RateLimitLimit' }
+          RateLimit-Remaining: { $ref: '../../openapi.yaml#/components/headers/RateLimitRemaining' }
+          RateLimit-Reset: { $ref: '../../openapi.yaml#/components/headers/RateLimitReset' }
+          RateLimit-Policy: { $ref: '../../openapi.yaml#/components/headers/RateLimitPolicy' }
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/AuthenticationResponse' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/InvalidCredentials' }
+      '403': { $ref: '../../openapi.yaml#/components/responses/AccountInactive' }
+      '429': { $ref: '../../openapi.yaml#/components/responses/SignInRateLimited' }
+me:
+  get:
+    tags: [Identity]
+    summary: Get the currently authenticated user
+    security: [{ bearerAuth: [] }]
+    responses:
+      '200':
+        description: Current authenticated user.
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/CurrentUserResponse' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }

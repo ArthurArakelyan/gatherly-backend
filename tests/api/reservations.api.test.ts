@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { aliceId, createCommunityFixture, createEventFixture } from '../fixtures/database.js';
 import { type PostgresHarness, startPostgresHarness } from '../helpers/postgres.js';
-import { createTestApp } from '../helpers/test-app.js';
+import { authorizationFor, createTestApp } from '../helpers/test-app.js';
 
 describe('reservations API', () => {
   let harness: PostgresHarness;
@@ -30,7 +30,7 @@ describe('reservations API', () => {
 
     const missingKey = await request(app)
       .post(`/api/events/${eventId}/reservations`)
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .send({});
     expect(missingKey.status).toBe(400);
     expect((missingKey.body as { error: { code: string } }).error.code).toBe(
@@ -39,7 +39,7 @@ describe('reservations API', () => {
 
     const first = await request(app)
       .post(`/api/events/${eventId}/reservations`)
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .set('Idempotency-Key', 'alice-reserve')
       .send({});
     expect(first.status).toBe(201);
@@ -49,14 +49,14 @@ describe('reservations API', () => {
 
     const replay = await request(app)
       .post(`/api/events/${eventId}/reservations`)
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .set('Idempotency-Key', 'alice-reserve')
       .send({});
     expect(replay.body).toEqual(first.body);
 
     const duplicate = await request(app)
       .post(`/api/events/${eventId}/reservations`)
-      .set('x-user-id', aliceId)
+      .set('authorization', authorizationFor(aliceId))
       .set('Idempotency-Key', 'alice-new-intent')
       .send({});
     expect(duplicate.status).toBe(409);

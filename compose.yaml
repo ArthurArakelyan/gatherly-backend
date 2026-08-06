@@ -31,6 +31,10 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PRISMA_POOL_MAX: ${PRISMA_POOL_MAX:-5}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-gatherly-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-gatherly-client}
+      JWT_ACCESS_TOKEN_TTL_SECONDS: ${JWT_ACCESS_TOKEN_TTL_SECONDS:-900}
     ports:
       - '127.0.0.1:${APP_PORT}:3000'
     depends_on:

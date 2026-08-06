@@ -1,8 +1,21 @@
 import 'dotenv/config';
 
 import { PrismaPg } from '@prisma/adapter-pg';
+import argon2 from 'argon2';
 
 import { PrismaClient } from '../src/generated/prisma/client.js';
+
+const developmentPassword = process.env['DEVELOPMENT_SEED_PASSWORD'];
+if (developmentPassword === undefined || developmentPassword.length < 12) {
+  throw new Error('DEVELOPMENT_SEED_PASSWORD of at least 12 characters is required');
+}
+
+const passwordHash = await argon2.hash(developmentPassword, {
+  type: argon2.argon2id,
+  memoryCost: 19_456,
+  timeCost: 2,
+  parallelism: 1,
+});
 
 const databaseUrl = process.env['DATABASE_URL'];
 if (databaseUrl === undefined) throw new Error('DATABASE_URL is required to seed the database');
@@ -20,8 +33,8 @@ const seed = async (): Promise<void> => {
   for (const user of users) {
     await prisma.user.upsert({
       where: { username: user.username },
-      update: { status: 'ACTIVE' },
-      create: { ...user, status: 'ACTIVE' },
+      update: { status: 'ACTIVE', passwordHash },
+      create: { ...user, status: 'ACTIVE', passwordHash },
     });
   }
 };

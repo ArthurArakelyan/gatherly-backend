@@ -3,27 +3,21 @@ create:
     tags: [Reservations]
     summary: Confirm a reservation or add the caller to the waitlist
     description: |
-      Requires an active community membership and an Idempotency-Key. Reusing the
-      same key returns the stored original outcome and creates no duplicate effect.
+      Requires an active community membership, a bearer token, and an
+      Idempotency-Key. Reusing a completed key returns its original outcome;
+      an in-progress or differently reused key is rejected.
+    security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/EventId'
-      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
       - $ref: '../../openapi.yaml#/components/parameters/IdempotencyKey'
     responses:
       '201':
         description: The caller was confirmed or waitlisted.
         content:
           application/json:
-            schema:
-              type: object
-              required: [data]
-              properties:
-                data:
-                  oneOf:
-                    - $ref: '../../openapi.yaml#/components/schemas/ConfirmedOutcome'
-                    - $ref: '../../openapi.yaml#/components/schemas/WaitlistedOutcome'
+            schema: { $ref: '../../openapi.yaml#/components/schemas/ReservationOutcomeResponse' }
       '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
-      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
       '403': { $ref: '../../openapi.yaml#/components/responses/Error' }
       '404': { $ref: '../../openapi.yaml#/components/responses/Error' }
       '409': { $ref: '../../openapi.yaml#/components/responses/Error' }
@@ -31,61 +25,53 @@ mine:
   get:
     tags: [Reservations]
     summary: Get the caller's active confirmed reservation
+    security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/EventId'
-      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
     responses:
       '200':
         description: Active reservation returned.
         content:
           application/json:
-            schema:
-              type: object
-              required: [data]
-              properties:
-                data: { $ref: '../../openapi.yaml#/components/schemas/Reservation' }
+            schema: { $ref: '../../openapi.yaml#/components/schemas/ReservationResponse' }
       '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
-      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
       '404': { $ref: '../../openapi.yaml#/components/responses/Error' }
   delete:
     tags: [Reservations]
     summary: Cancel the caller's reservation and promote at most one waiting user
+    security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/EventId'
-      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
     responses:
-      '204': { description: Reservation cancelled and promotion committed, if applicable. }
+      '204': { description: Reservation cancelled and promotion committed if applicable. }
       '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
-      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
       '404': { $ref: '../../openapi.yaml#/components/responses/Error' }
 waitlist:
   get:
     tags: [Reservations]
     summary: Get the caller's active waitlist entry
+    security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/EventId'
-      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
     responses:
       '200':
         description: Active waiting entry returned.
         content:
           application/json:
-            schema:
-              type: object
-              required: [data]
-              properties:
-                data: { $ref: '../../openapi.yaml#/components/schemas/WaitlistEntry' }
+            schema: { $ref: '../../openapi.yaml#/components/schemas/WaitlistEntryResponse' }
       '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
-      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
       '404': { $ref: '../../openapi.yaml#/components/responses/Error' }
   delete:
     tags: [Reservations]
     summary: Cancel the caller's waitlist entry
+    security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/EventId'
-      - $ref: '../../openapi.yaml#/components/parameters/RequestUserId'
     responses:
       '204': { description: Waitlist entry cancelled. }
       '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
-      '401': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
       '404': { $ref: '../../openapi.yaml#/components/responses/Error' }

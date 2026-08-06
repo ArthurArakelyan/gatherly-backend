@@ -17,6 +17,7 @@ export interface AppDependencies {
   membershipsRouter: Router;
   eventsRouter: Router;
   reservationsRouter: Router;
+  identityRouter: Router;
 }
 
 export const createApp = (dependencies: AppDependencies): Express => {
@@ -39,6 +40,7 @@ export const createApp = (dependencies: AppDependencies): Express => {
     response.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'not_ready' });
   });
 
+  app.use('/auth', dependencies.identityRouter);
   app.use('/api/communities', dependencies.communitiesRouter);
   app.use('/api/communities', dependencies.membershipsRouter);
   app.use('/api', dependencies.eventsRouter);
