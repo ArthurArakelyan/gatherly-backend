@@ -704,6 +704,12 @@ Add each technology only when there is a demonstrated lesson or product need:
 7. Add Pino structured logs, OpenTelemetry traces, metrics, Prometheus/Grafana/Tempo, and Uptime Kuma.
 8. Add CI/CD, immutable images, staging, smoke tests, backups, restore tests, rollback planning, and failure/load testing.
 
+Start Phase 6 with the build-it-yourself PostgreSQL measurement and Redis
+implementation guide in
+[`PHASE_6_POSTGRES_PERFORMANCE_REDIS_HANDBOOK.md`](./PHASE_6_POSTGRES_PERFORMANCE_REDIS_HANDBOOK.md).
+It deliberately stops before SSE, WebSockets, Elasticsearch, and Kafka so each
+later technology still needs a concrete lesson and product use.
+
 Do not add Kubernetes or split the modular monolith into microservices for this project.
 
 ### Late-stage deployment question
