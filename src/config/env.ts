@@ -16,6 +16,11 @@ const environmentSchema = z.object({
   JWT_ISSUER: z.string().min(1).default('gatherly-api'),
   JWT_AUDIENCE: z.string().min(1).default('gatherly-client'),
   JWT_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(900),
+  REDIS_URL: z.url().refine((value) => ['redis:', 'rediss:'].includes(new URL(value).protocol), {
+    message: 'REDIS_URL must use redis:// or rediss://',
+  }),
+  REDIS_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(1_000),
+  EVENT_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(3_600).default(60),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;

@@ -9,6 +9,7 @@ import { CommunitiesRepository } from '../../src/modules/communities/communities
 import { createCommunitiesRouter } from '../../src/modules/communities/communities.routes.js';
 import { CommunitiesService } from '../../src/modules/communities/communities.service.js';
 import { EventsController } from '../../src/modules/events/events.controller.js';
+import type { EventCache } from '../../src/modules/events/events.cache.js';
 import { EventsRepository } from '../../src/modules/events/events.repository.js';
 import { createEventsRouter } from '../../src/modules/events/events.routes.js';
 import { EventsService } from '../../src/modules/events/events.service.js';
@@ -23,14 +24,25 @@ import { ReservationsService } from '../../src/modules/reservations/reservations
 import { Argon2PasswordHasher } from '../../src/infrastructure/security/argon2-password-hasher.js';
 import { JwtAccessTokens } from '../../src/infrastructure/security/jwt-access-tokens.js';
 import { IdentityController } from '../../src/modules/identity/identity.controller.js';
+import {
+  signInRateLimitPolicy,
+  signUpRateLimitPolicy,
+} from '../../src/modules/identity/identity.rate-limits.js';
 import { IdentityRepository } from '../../src/modules/identity/identity.repository.js';
 import { createIdentityRouter } from '../../src/modules/identity/identity.routes.js';
 import { IdentityService } from '../../src/modules/identity/identity.service.js';
+import type { IdentityRateLimiters } from '../../src/modules/identity/identity.types.js';
 import { createRequireAuthenticatedUser } from '../../src/shared/auth/authentication.middleware.js';
+import { createLocalRateLimit } from '../../src/shared/rate-limit/rate-limit.middleware.js';
 
 interface TestDatabase {
   pool: Pool;
   prisma: PrismaClient;
+}
+
+interface TestAppDependencies {
+  eventCache?: EventCache;
+  identityRateLimiters?: IdentityRateLimiters;
 }
 
 const testAccessTokens = new JwtAccessTokens({
@@ -43,7 +55,10 @@ const testAccessTokens = new JwtAccessTokens({
 export const authorizationFor = (userId: string): string =>
   `Bearer ${testAccessTokens.sign(userId)}`;
 
-export const createTestApp = ({ pool, prisma }: TestDatabase): Express => {
+export const createTestApp = (
+  { pool, prisma }: TestDatabase,
+  dependencies: TestAppDependencies = {},
+): Express => {
   const identityService = new IdentityService(
     new IdentityRepository(prisma),
     new Argon2PasswordHasher(),
@@ -51,9 +66,14 @@ export const createTestApp = ({ pool, prisma }: TestDatabase): Express => {
     900,
   );
   const requireAuthenticatedUser = createRequireAuthenticatedUser(identityService);
+  const identityRateLimiters = dependencies.identityRateLimiters ?? {
+    signIn: createLocalRateLimit(signInRateLimitPolicy),
+    signUp: createLocalRateLimit(signUpRateLimitPolicy),
+  };
   const identityRouter = createIdentityRouter(
     new IdentityController(identityService),
     requireAuthenticatedUser,
+    identityRateLimiters,
   );
   const communitiesRouter = createCommunitiesRouter(
     new CommunitiesController(new CommunitiesService(new CommunitiesRepository(prisma))),
@@ -64,7 +84,7 @@ export const createTestApp = ({ pool, prisma }: TestDatabase): Express => {
     requireAuthenticatedUser,
   );
   const eventsRouter = createEventsRouter(
-    new EventsController(new EventsService(new EventsRepository(prisma))),
+    new EventsController(new EventsService(new EventsRepository(prisma), dependencies.eventCache)),
     requireAuthenticatedUser,
   );
   const reservationsRouter = createReservationsRouter(

@@ -806,20 +806,118 @@ queueing while offline is disabled, and shutdown has one explicit close path.
 
 ---
 
-## Checkpoint 11: Define a module-owned event cache port
+## Checkpoint 11: Implement one reusable validated Redis cache
 
 ### Reason
 
-`EventsService` should know that it can load/store cached `Event` values, but
-it should not know Node Redis commands or serialization. That keeps domain
-logic independently testable and prevents infrastructure types from spreading
-through the module.
+Readiness checks, JSON parsing, Redis error handling, TTL writes, and deletion
+behavior are not event-specific. Repeating them in a separate Redis adapter for
+every cached resource would add noise and make failure behavior inconsistent.
+
+Create one reusable `RedisCache` for ordinary validated JSON cache entries.
+Instantiate it once in the composition root and inject it where needed; do not
+create a process-global singleton. Callers still provide a Zod schema because a
+generic TypeScript type cannot validate untrusted Redis bytes at runtime.
+
+This helper is deliberately not a universal wrapper around every Redis use.
+The rate limiter continues to use the raw client because its Lua script and
+atomic counter semantics are not JSON cache operations.
+
+### Implementation
+
+Create `src/infrastructure/redis/cache.ts` with this **complete file**:
+
+```ts
+import type { Logger } from 'pino';
+import type { ZodType } from 'zod';
+
+import type { GatherlyRedisClient } from './client.js';
+
+export class RedisCache {
+  public constructor(
+    private readonly client: GatherlyRedisClient,
+    private readonly logger: Logger,
+  ) {}
+
+  public async get<T>(key: string, schema: ZodType<T>): Promise<T | null> {
+    if (!this.client.isReady) return null;
+
+    try {
+      const value = await this.client.get(key);
+      if (value === null) return null;
+
+      const parsedJson: unknown = JSON.parse(value);
+      const parsed = schema.safeParse(parsedJson);
+      if (!parsed.success) {
+        this.logger.warn('Discarding invalid cached JSON value');
+        await this.client.del(key);
+        return null;
+      }
+
+      return parsed.data;
+    } catch (error) {
+      this.logger.warn({ err: error }, 'Redis cache read failed');
+      if (error instanceof SyntaxError) await this.delete(key);
+      return null;
+    }
+  }
+
+  public async set(key: string, value: unknown, ttlSeconds: number): Promise<void> {
+    if (!this.client.isReady) return;
+
+    try {
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined) {
+        this.logger.warn('Redis cache value could not be serialized');
+        return;
+      }
+
+      await this.client.set(key, serialized, { EX: ttlSeconds });
+    } catch (error) {
+      this.logger.warn({ err: error }, 'Redis cache write failed');
+    }
+  }
+
+  public async delete(key: string): Promise<void> {
+    if (!this.client.isReady) return;
+
+    try {
+      await this.client.del(key);
+    } catch (error) {
+      this.logger.warn({ err: error }, 'Redis cache deletion failed');
+    }
+  }
+}
+```
+
+The generic helper intentionally does not log keys or values. Future cache keys
+may contain operational identifiers, and cached values may contain data that
+must not appear in logs.
+
+### Expected result
+
+There is one place for Redis JSON parsing, validation, readiness checks, TTL
+writes, deletion, and graceful cache-failure behavior.
+
+---
+
+## Checkpoint 12: Define the module-owned event cache
+
+### Reason
+
+`EventsService` should know only that it can load/store cached `Event` values.
+The events module owns its cache key, serialized schema, date reconstruction,
+and small technology-neutral port. The reusable `RedisCache` owns the repeated
+Redis mechanics from Checkpoint 11.
 
 ### Implementation
 
 Create `src/modules/events/events.cache.ts` with this **complete file**:
 
 ```ts
+import { z } from 'zod';
+
+import type { RedisCache } from '../../infrastructure/redis/cache.js';
 import type { Event } from './events.types.js';
 
 export interface EventCache {
@@ -827,57 +925,6 @@ export interface EventCache {
   set(event: Event): Promise<void>;
   delete(eventId: string): Promise<void>;
 }
-
-export class NoopEventCache implements EventCache {
-  public get(_eventId: string): Promise<null> {
-    return Promise.resolve(null);
-  }
-
-  public set(_event: Event): Promise<void> {
-    return Promise.resolve();
-  }
-
-  public delete(_eventId: string): Promise<void> {
-    return Promise.resolve();
-  }
-}
-```
-
-The no-op implementation is useful for unit/API tests that are not about
-Redis. Tests should not need a Redis container merely because an optional cache
-port exists.
-
-### Expected result
-
-The events module owns a small technology-neutral interface; no Redis import
-appears in `events.service.ts`, controllers, routes, or domain types.
-
----
-
-## Checkpoint 12: Implement a validated Redis event cache
-
-### Reason
-
-Redis values are serialized bytes, not trusted `Event` objects. Dates become
-strings, old deployments may leave incompatible values, and developers can
-manually corrupt a key. Validate on read just like any other external boundary.
-
-Cache failures must never replace a successful PostgreSQL response with a 500.
-The adapter therefore logs and returns a miss on read failure, and logs/ignores
-write/delete failure.
-
-### Implementation
-
-Create `src/infrastructure/redis/redis-event-cache.ts` with this **complete
-file**:
-
-```ts
-import type { Logger } from 'pino';
-import { z } from 'zod';
-
-import type { EventCache } from '../../modules/events/events.cache.js';
-import type { Event } from '../../modules/events/events.types.js';
-import type { GatherlyRedisClient } from './client.js';
 
 const cachedEventSchema = z.object({
   id: z.uuid(),
@@ -889,88 +936,27 @@ const cachedEventSchema = z.object({
   format: z.enum(['IN_PERSON', 'ONLINE', 'HYBRID']),
   status: z.string(),
   visibility: z.enum(['PUBLIC', 'COMMUNITY_ONLY', 'INVITE_ONLY']),
-  startsAt: z.iso.datetime(),
-  endsAt: z.iso.datetime(),
+  startsAt: z.iso.datetime().transform((value) => new Date(value)),
+  endsAt: z.iso.datetime().transform((value) => new Date(value)),
   timezone: z.string(),
   capacity: z.number().int().positive(),
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
+  createdAt: z.iso.datetime().transform((value) => new Date(value)),
+  updatedAt: z.iso.datetime().transform((value) => new Date(value)),
 });
-
-type CachedEvent = z.infer<typeof cachedEventSchema>;
 
 const keyFor = (eventId: string): string => `gatherly:v1:event:${eventId}`;
 
-const serialize = (event: Event): CachedEvent => ({
-  ...event,
-  startsAt: event.startsAt.toISOString(),
-  endsAt: event.endsAt.toISOString(),
-  createdAt: event.createdAt.toISOString(),
-  updatedAt: event.updatedAt.toISOString(),
+export const createEventCache = (cache: RedisCache, ttlSeconds: number): EventCache => ({
+  get: (eventId) => cache.get(keyFor(eventId), cachedEventSchema),
+  set: (event) => cache.set(keyFor(event.id), event, ttlSeconds),
+  delete: (eventId) => cache.delete(keyFor(eventId)),
 });
-
-const deserialize = (event: CachedEvent): Event => ({
-  ...event,
-  startsAt: new Date(event.startsAt),
-  endsAt: new Date(event.endsAt),
-  createdAt: new Date(event.createdAt),
-  updatedAt: new Date(event.updatedAt),
-});
-
-export class RedisEventCache implements EventCache {
-  public constructor(
-    private readonly client: GatherlyRedisClient,
-    private readonly ttlSeconds: number,
-    private readonly logger: Logger,
-  ) {}
-
-  public async get(eventId: string): Promise<Event | null> {
-    if (!this.client.isReady) return null;
-
-    const key = keyFor(eventId);
-    try {
-      const value = await this.client.get(key);
-      if (value === null) return null;
-
-      const parsedJson: unknown = JSON.parse(value);
-      const parsedEvent = cachedEventSchema.safeParse(parsedJson);
-      if (!parsedEvent.success) {
-        this.logger.warn({ eventId }, 'Discarding invalid cached event');
-        await this.client.del(key);
-        return null;
-      }
-
-      return deserialize(parsedEvent.data);
-    } catch (error) {
-      this.logger.warn({ err: error, eventId }, 'Redis event-cache read failed');
-      if (error instanceof SyntaxError) await this.delete(eventId);
-      return null;
-    }
-  }
-
-  public async set(event: Event): Promise<void> {
-    if (!this.client.isReady) return;
-
-    try {
-      await this.client.set(keyFor(event.id), JSON.stringify(serialize(event)), {
-        EX: this.ttlSeconds,
-      });
-    } catch (error) {
-      this.logger.warn({ err: error, eventId: event.id }, 'Redis event-cache write failed');
-    }
-  }
-
-  public async delete(eventId: string): Promise<void> {
-    if (!this.client.isReady) return;
-
-    try {
-      await this.client.del(keyFor(eventId));
-    } catch (error) {
-      this.logger.warn({ err: error, eventId }, 'Redis event-cache deletion failed');
-    }
-  }
-}
 ```
+
+`JSON.stringify` converts the `Event` dates to ISO strings. The Zod transforms
+restore them to real `Date` objects after validating the cached representation.
+Only `events.cache.ts` knows the event key and schema; `events.service.ts`,
+controllers, routes, and domain types contain no Node Redis commands.
 
 Do not cache not-found responses in the first implementation. Negative caching
 can reduce repeated probes, but it also introduces a new stale-not-found case
@@ -985,9 +971,9 @@ yarn lint
 
 ### Expected result
 
-Cache data is versioned, bounded by TTL, parsed through Zod, restored to real
-`Date` objects, and incapable of turning a Redis fault into a failed event
-detail request.
+Cache data is versioned, bounded by TTL, parsed through the reusable cache,
+restored to real `Date` objects by the event schema, and incapable of turning a
+Redis fault into a failed event-detail request.
 
 ---
 
@@ -1008,48 +994,96 @@ decision because it knows which result is safe to cache.
 
 ### Implementation
 
-Add this import to `src/modules/events/events.service.ts`:
+Replace `src/modules/events/events.service.ts` with this **complete file**:
 
 ```ts
+import { AppError } from '../../shared/errors/app-error.js';
 import type { EventCache } from './events.cache.js';
-```
+import type { EventsRepository } from './events.repository.js';
+import type { CreateEventInput, Event, EventFilters, EventPage } from './events.types.js';
 
-Replace the constructor with:
+const creationRoles = new Set(['OWNER', 'ORGANIZER', 'MODERATOR']);
 
-```ts
+export class EventsService {
   public constructor(
     private readonly repository: EventsRepository,
-    private readonly cache: EventCache,
+    private readonly cache?: EventCache,
   ) {}
-```
 
-Replace `get` with:
+  public async create(
+    communityId: string,
+    userId: string,
+    input: CreateEventInput,
+  ): Promise<Event> {
+    const authorization = await this.repository.findCreationAuthorization(communityId, userId);
 
-```ts
+    if (authorization?.communityStatus !== 'ACTIVE') {
+      throw new AppError(404, 'COMMUNITY_NOT_FOUND', 'The requested community does not exist');
+    }
+    if (
+      authorization.membershipStatus !== 'ACTIVE' ||
+      authorization.role === null ||
+      !creationRoles.has(authorization.role)
+    ) {
+      throw new AppError(403, 'COMMUNITY_PERMISSION_DENIED', 'You cannot create events here');
+    }
+    if (input.startsAt >= input.endsAt) {
+      throw new AppError(400, 'INVALID_EVENT_TIME', 'Event end must be after its start');
+    }
+
+    return this.repository.create(communityId, userId, input);
+  }
+
+  public list(filters: EventFilters): Promise<EventPage> {
+    return this.repository.listPublic(filters);
+  }
+
   public async get(eventId: string): Promise<Event> {
-    const cachedEvent = await this.cache.get(eventId);
-    if (cachedEvent !== null) return cachedEvent;
+    const cachedEvent = await this.cache?.get(eventId);
+    if (cachedEvent !== null && cachedEvent !== undefined) return cachedEvent;
 
     const event = await this.repository.findPublicById(eventId);
     if (event === null) {
       throw new AppError(404, 'EVENT_NOT_FOUND', 'The requested event does not exist');
     }
 
-    await this.cache.set(event);
+    await this.cache?.set(event);
     return event;
   }
+}
 ```
 
-Update every existing construction of `EventsService` outside `server.ts` to
-pass `new NoopEventCache()`. Import it from `events.cache.ts`. This includes
-`tests/helpers/test-app.ts` and direct unit-test construction.
+The cache is an optional accelerator. Before Checkpoint 16 wires the real
+Redis-backed implementation, `server.ts` and tests unrelated to caching can
+continue constructing `new EventsService(repository)`. Cache-specific tests
+inject a mock, and production injects the real adapter once Redis is composed.
+
+Do not add a production no-op cache implementation merely to satisfy tests.
+Create `tests/helpers/event-cache.ts` with this **complete file**:
+
+```ts
+import { vi, type Mocked } from 'vitest';
+
+import type { EventCache } from '../../src/modules/events/events.cache.js';
+
+export const createEventCacheMock = (): Mocked<EventCache> => ({
+  get: vi.fn<EventCache['get']>().mockResolvedValue(null),
+  set: vi.fn<EventCache['set']>().mockResolvedValue(undefined),
+  delete: vi.fn<EventCache['delete']>().mockResolvedValue(undefined),
+});
+```
+
+Tests that exercise cache behavior configure and assert `cache.get`,
+`cache.set`, and `cache.delete` directly. Tests unrelated to caching omit the
+optional dependency. Production code contains only the real event-cache
+factory and its port.
 
 When an event update/cancel/archive endpoint is later implemented, write
 PostgreSQL first and then invalidate:
 
 ```ts
 const updated = await this.repository.updateAuthorized(...);
-await this.cache.delete(updated.id);
+await this.cache?.delete(updated.id);
 return updated;
 ```
 
@@ -1064,51 +1098,130 @@ member access or overbooking is not.
 
 ### Verification
 
-Add these cases to `tests/unit/events.service.test.ts` using small fakes:
+Replace `tests/unit/events.service.test.ts` with this **complete file**:
 
 ```ts
-it('returns a cached public event without querying PostgreSQL', async () => {
-  const event = makeEvent();
-  const repository = {
-    findPublicById: vi.fn(),
-  };
-  const cache = {
-    get: vi.fn().mockResolvedValue(event),
-    set: vi.fn(),
-    delete: vi.fn(),
-  };
-  const service = new EventsService(repository as unknown as EventsRepository, cache);
+import { describe, expect, it, vi } from 'vitest';
 
-  await expect(service.get(event.id)).resolves.toEqual(event);
-  expect(repository.findPublicById).not.toHaveBeenCalled();
-  expect(cache.set).not.toHaveBeenCalled();
-});
+import type { EventsRepository } from '../../src/modules/events/events.repository.js';
+import { EventsService } from '../../src/modules/events/events.service.js';
+import type { CreateEventInput, Event } from '../../src/modules/events/events.types.js';
+import { createEventCacheMock } from '../helpers/event-cache.js';
 
-it('loads a cache miss from PostgreSQL and populates Redis', async () => {
-  const event = makeEvent();
-  const repository = {
-    findPublicById: vi.fn().mockResolvedValue(event),
-  };
-  const cache = {
-    get: vi.fn().mockResolvedValue(null),
-    set: vi.fn().mockResolvedValue(undefined),
-    delete: vi.fn(),
-  };
-  const service = new EventsService(repository as unknown as EventsRepository, cache);
+const input: CreateEventInput = {
+  title: 'Board games',
+  slug: 'board-games',
+  description: '',
+  format: 'IN_PERSON',
+  visibility: 'PUBLIC',
+  startsAt: new Date('2030-08-03T18:00:00.000Z'),
+  endsAt: new Date('2030-08-03T21:00:00.000Z'),
+  timezone: 'Europe/Moscow',
+  capacity: 10,
+};
 
-  await expect(service.get(event.id)).resolves.toEqual(event);
-  expect(repository.findPublicById).toHaveBeenCalledWith(event.id);
-  expect(cache.set).toHaveBeenCalledWith(event);
+const event: Event = {
+  id: '10000000-0000-4000-8000-000000000001',
+  communityId: '20000000-0000-4000-8000-000000000001',
+  createdByUserId: '30000000-0000-4000-8000-000000000001',
+  ...input,
+  status: 'PUBLISHED',
+  createdAt: new Date('2026-08-07T00:00:00.000Z'),
+  updatedAt: new Date('2026-08-07T00:00:00.000Z'),
+};
+
+describe('EventsService', () => {
+  it('rejects an unauthorized event creator before persistence', async () => {
+    const create = vi.fn();
+    const findCreationAuthorization = vi.fn().mockResolvedValue({
+      communityStatus: 'ACTIVE',
+      membershipStatus: 'ACTIVE',
+      role: 'MEMBER',
+    });
+    const repository = {
+      create,
+      findCreationAuthorization,
+      findPublicById: vi.fn(),
+      listPublic: vi.fn(),
+    } as unknown as EventsRepository;
+
+    await expect(
+      new EventsService(repository).create('community-id', 'user-id', input),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: 'COMMUNITY_PERMISSION_DENIED',
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an end instant that is not after the start instant', async () => {
+    const findCreationAuthorization = vi.fn().mockResolvedValue({
+      communityStatus: 'ACTIVE',
+      membershipStatus: 'ACTIVE',
+      role: 'OWNER',
+    });
+    const repository = {
+      create: vi.fn(),
+      findCreationAuthorization,
+      findPublicById: vi.fn(),
+      listPublic: vi.fn(),
+    } as unknown as EventsRepository;
+
+    await expect(
+      new EventsService(repository).create('community-id', 'user-id', {
+        ...input,
+        endsAt: input.startsAt,
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'INVALID_EVENT_TIME' });
+  });
+
+  it('returns a cached public event without querying PostgreSQL', async () => {
+    const findPublicById = vi.fn();
+    const repository = {
+      create: vi.fn(),
+      findCreationAuthorization: vi.fn(),
+      findPublicById,
+      listPublic: vi.fn(),
+    } as unknown as EventsRepository;
+    const cache = createEventCacheMock();
+    cache.get.mockResolvedValue(event);
+    const service = new EventsService(repository, cache);
+
+    await expect(service.get(event.id)).resolves.toEqual(event);
+    expect(findPublicById).not.toHaveBeenCalled();
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
+  it('loads a cache miss from PostgreSQL and populates the cache', async () => {
+    const findPublicById = vi.fn().mockResolvedValue(event);
+    const repository = {
+      create: vi.fn(),
+      findCreationAuthorization: vi.fn(),
+      findPublicById,
+      listPublic: vi.fn(),
+    } as unknown as EventsRepository;
+    const cache = createEventCacheMock();
+    const service = new EventsService(repository, cache);
+
+    await expect(service.get(event.id)).resolves.toEqual(event);
+    expect(findPublicById).toHaveBeenCalledWith(event.id);
+    expect(cache.set).toHaveBeenCalledWith(event);
+  });
 });
 ```
 
-Use the existing event fixture/helper shape in this test file rather than
-creating a second inconsistent domain object merely to copy the snippet.
+Run the focused checks before continuing:
+
+```powershell
+yarn vitest run tests/unit/events.service.test.ts
+yarn typecheck
+yarn lint
+```
 
 ### Expected result
 
-A cache hit avoids PostgreSQL, a miss loads and populates, and the service has
-no Redis imports.
+A cache hit avoids PostgreSQL, a miss loads and populates, existing callers can
+omit the optional accelerator, and the service has no Redis imports.
 
 ---
 
@@ -1251,8 +1364,8 @@ Create `src/shared/rate-limit/rate-limit.middleware.ts` with this **complete
 file**:
 
 ```ts
-import type { RequestHandler } from 'express';
-import { rateLimit } from 'express-rate-limit';
+import type { Request, RequestHandler } from 'express';
+import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 
 import { AppError } from '../errors/app-error.js';
 import type { FixedWindowRateLimiter } from './fixed-window-rate-limiter.js';
@@ -1265,12 +1378,16 @@ export interface RateLimitPolicy {
   errorMessage: string;
 }
 
+const getRateLimitSubject = (request: Request): string =>
+  request.ip === undefined ? 'unknown-client' : ipKeyGenerator(request.ip);
+
 export const createLocalRateLimit = (policy: RateLimitPolicy): RequestHandler =>
   rateLimit({
     windowMs: policy.windowMs,
     limit: policy.limit,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: getRateLimitSubject,
     handler: (_request, _response, next) => {
       next(new AppError(429, policy.errorCode, policy.errorMessage));
     },
@@ -1285,7 +1402,7 @@ export const createDistributedRateLimit = (
   return async (request, response, next) => {
     const result = await limiter.consume(
       policy.scope,
-      request.ip,
+      getRateLimitSubject(request),
       policy.limit,
       Math.ceil(policy.windowMs / 1_000),
     );
@@ -1308,6 +1425,13 @@ export const createDistributedRateLimit = (
   };
 };
 ```
+
+Express types `request.ip` as `string | undefined`. Use one resolver for both
+the distributed limiter and its local fallback. `ipKeyGenerator` groups IPv6
+addresses by subnet so clients cannot trivially rotate interface addresses to
+bypass a limit. If Express cannot determine an address, all such requests share
+the conservative `unknown-client` bucket; never generate a random subject or
+trust `X-Forwarded-For` directly.
 
 In `src/modules/identity/identity.routes.ts`, remove the direct
 `express-rate-limit` and `AppError` imports. Add this exported interface:
@@ -1407,8 +1531,9 @@ import {
   createRedisClient,
   startRedisClient,
 } from './infrastructure/redis/client.js';
-import { RedisEventCache } from './infrastructure/redis/redis-event-cache.js';
+import { RedisCache } from './infrastructure/redis/cache.js';
 import { RedisFixedWindowRateLimiter } from './infrastructure/redis/redis-fixed-window-rate-limiter.js';
+import { createEventCache } from './modules/events/events.cache.js';
 import {
   signInRateLimitPolicy,
   signUpRateLimitPolicy,
@@ -1420,6 +1545,7 @@ After creating `logger`, `pool`, and `prisma`, create/start Redis:
 
 ```ts
 const redis = createRedisClient(environment, logger);
+const redisCache = new RedisCache(redis, logger);
 startRedisClient(redis, logger);
 ```
 
@@ -1427,7 +1553,7 @@ Construct the event service with the concrete cache:
 
 ```ts
 const eventsRepository = new EventsRepository(prisma);
-const eventCache = new RedisEventCache(redis, environment.EVENT_CACHE_TTL_SECONDS, logger);
+const eventCache = createEventCache(redisCache, environment.EVENT_CACHE_TTL_SECONDS);
 const eventsService = new EventsService(eventsRepository, eventCache);
 ```
 
@@ -1483,11 +1609,10 @@ Finally extend shutdown dependency closure:
 bounded shutdown coordinator prevents reconnect timers or open sockets from
 holding the process alive.
 
-In `tests/helpers/test-app.ts`, import `NoopEventCache` and construct:
-
-```ts
-new EventsService(new EventsRepository(prisma), new NoopEventCache());
-```
+Keep the default `tests/helpers/test-app.ts` event-service construction
+unchanged for now. The cache dependency is optional, so API tests unrelated to
+caching do not need a fake Redis dependency. Checkpoint 18 adds an optional
+`EventCache` parameter for the one API test that exercises cache-aside.
 
 For identity routes in API tests, preserve the exact Phase 4 behavior with a
 fresh local limiter each time `createTestApp` is called:
@@ -1517,8 +1642,9 @@ docker compose -f compose.yaml -f compose.dev.yaml config --quiet
 
 ### Expected result
 
-The process has one Redis client. PostgreSQL remains the only readiness
-dependency, and graceful shutdown closes Redis, Prisma, and the raw pg pool.
+The process has one Redis client and one reusable JSON cache instance.
+PostgreSQL remains the only readiness dependency, and graceful shutdown closes
+Redis, Prisma, and the raw pg pool.
 
 ---
 
@@ -1582,8 +1708,9 @@ time this checkpoint is reached.
 import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { RedisEventCache } from '../../src/infrastructure/redis/redis-event-cache.js';
+import { RedisCache } from '../../src/infrastructure/redis/cache.js';
 import { RedisFixedWindowRateLimiter } from '../../src/infrastructure/redis/redis-fixed-window-rate-limiter.js';
+import { createEventCache } from '../../src/modules/events/events.cache.js';
 import type { Event } from '../../src/modules/events/events.types.js';
 import { type RedisHarness, startRedisHarness } from '../helpers/redis.js';
 
@@ -1621,7 +1748,8 @@ describe('Redis infrastructure', () => {
   });
 
   it('round-trips an event with real dates and a bounded TTL', async () => {
-    const cache = new RedisEventCache(harness.client, 60, pino({ enabled: false }));
+    const redisCache = new RedisCache(harness.client, pino({ enabled: false }));
+    const cache = createEventCache(redisCache, 60);
 
     await cache.set(event);
     await expect(cache.get(event.id)).resolves.toEqual(event);
@@ -1633,7 +1761,8 @@ describe('Redis infrastructure', () => {
 
   it('deletes an invalid cached value and treats it as a miss', async () => {
     const key = `gatherly:v1:event:${event.id}`;
-    const cache = new RedisEventCache(harness.client, 60, pino({ enabled: false }));
+    const redisCache = new RedisCache(harness.client, pino({ enabled: false }));
+    const cache = createEventCache(redisCache, 60);
     await harness.client.set(key, '{"id":"not-a-valid-cached-event"}', { EX: 60 });
 
     await expect(cache.get(event.id)).resolves.toBeNull();
@@ -1686,8 +1815,9 @@ application uses cache-aside without changing its HTTP DTO.
 
 Create a Redis-enabled variant of the existing test composition helper. It
 should accept an `EventCache` and `IdentityRateLimiters`, while the default
-`createTestApp` continues using no-op/local dependencies. Avoid duplicating the
-entire composition root; add optional dependency parameters.
+`createTestApp` omits the optional event cache and continues using local
+rate-limit dependencies. Avoid duplicating the entire composition root; add
+optional dependency parameters.
 
 Then add a test that:
 

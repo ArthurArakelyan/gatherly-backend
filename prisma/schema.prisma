@@ -89,6 +89,7 @@ model Event {
 
   @@unique([communityId, slug], map: "events_community_slug_key")
   @@index([status, startsAt, id], map: "events_status_starts_idx")
+  @@index([communityId, visibility, startsAt, id, status], map: "events_public_community_starts_idx")
   @@map("events")
 }
 

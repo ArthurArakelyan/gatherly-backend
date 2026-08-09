@@ -1,3 +1,5 @@
+import type { RequestHandler } from 'express';
+
 export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'DELETED';
 export type PlatformRole = 'USER' | 'PLATFORM_MODERATOR' | 'PLATFORM_ADMIN';
 
@@ -30,4 +32,9 @@ export interface AuthenticationResult {
   accessToken: string;
   tokenType: 'Bearer';
   expiresIn: number;
+}
+
+export interface IdentityRateLimiters {
+  signUp: RequestHandler;
+  signIn: RequestHandler;
 }

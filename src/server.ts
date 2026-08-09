@@ -32,6 +32,19 @@ import { createRequireAuthenticatedUser } from './shared/auth/authentication.mid
 import { createIdentityRouter } from './modules/identity/identity.routes.js';
 import { IdentityController } from './modules/identity/identity.controller.js';
 import { createGracefulShutdown } from './infrastructure/http/graceful-shutdown.js';
+import {
+  closeRedisClient,
+  createRedisClient,
+  startRedisClient,
+} from './infrastructure/redis/client.js';
+import { RedisCache } from './infrastructure/redis/cache.js';
+import { createEventCache } from './modules/events/events.cache.js';
+import {
+  signInRateLimitPolicy,
+  signUpRateLimitPolicy,
+} from './modules/identity/identity.rate-limits.js';
+import { RedisFixedWindowRateLimiter } from './infrastructure/redis/redis-fixed-window-rate-limiter.js';
+import { createDistributedRateLimit } from './shared/rate-limit/rate-limit.middleware.js';
 
 const pinoConfig = {
   redact: {
@@ -67,6 +80,10 @@ const accessTokens = new JwtAccessTokens({
   ttlSeconds: environment.JWT_ACCESS_TOKEN_TTL_SECONDS,
 });
 
+const redis = createRedisClient(environment, logger);
+const redisCache = new RedisCache(redis, logger);
+startRedisClient(redis, logger);
+
 const identityRepository = new IdentityRepository(prisma);
 const identityService = new IdentityService(
   identityRepository,
@@ -75,9 +92,15 @@ const identityService = new IdentityService(
   environment.JWT_ACCESS_TOKEN_TTL_SECONDS,
 );
 const requireAuthenticatedUser = createRequireAuthenticatedUser(identityService);
+const fixedWindowRateLimiter = new RedisFixedWindowRateLimiter(redis, logger);
+const identityRateLimiters = {
+  signIn: createDistributedRateLimit(fixedWindowRateLimiter, signInRateLimitPolicy),
+  signUp: createDistributedRateLimit(fixedWindowRateLimiter, signUpRateLimitPolicy),
+};
 const identityRouter = createIdentityRouter(
   new IdentityController(identityService),
   requireAuthenticatedUser,
+  identityRateLimiters,
 );
 
 const communitiesRepository = new CommunitiesRepository(prisma);
@@ -95,7 +118,8 @@ const membershipsRouter = createMembershipsRouter(
 );
 
 const eventsRepository = new EventsRepository(prisma);
-const eventsService = new EventsService(eventsRepository);
+const eventCache = createEventCache(redisCache, environment.EVENT_CACHE_TTL_SECONDS);
+const eventsService = new EventsService(eventsRepository, eventCache);
 const eventsRouter = createEventsRouter(
   new EventsController(eventsService),
   requireAuthenticatedUser,
@@ -147,7 +171,7 @@ const gracefulShutdown = createGracefulShutdown({
   logger,
   timeoutMs: 10_000,
   closeDependencies: async () => {
-    await Promise.all([prisma.$disconnect(), pool.end()]);
+    await Promise.all([closeRedisClient(redis), prisma.$disconnect(), pool.end()]);
   },
 });
 

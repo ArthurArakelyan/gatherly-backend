@@ -1,11 +1,15 @@
 import { AppError } from '../../shared/errors/app-error.js';
+import type { EventCache } from './events.cache.js';
 import type { EventsRepository } from './events.repository.js';
 import type { CreateEventInput, Event, EventFilters, EventPage } from './events.types.js';
 
 const creationRoles = new Set(['OWNER', 'ORGANIZER', 'MODERATOR']);
 
 export class EventsService {
-  public constructor(private readonly repository: EventsRepository) {}
+  public constructor(
+    private readonly repository: EventsRepository,
+    private readonly cache?: EventCache,
+  ) {}
 
   public async create(
     communityId: string,
@@ -36,10 +40,15 @@ export class EventsService {
   }
 
   public async get(eventId: string): Promise<Event> {
+    const cachedEvent = await this.cache?.get(eventId);
+    if (cachedEvent !== null && cachedEvent !== undefined) return cachedEvent;
+
     const event = await this.repository.findPublicById(eventId);
     if (event === null) {
       throw new AppError(404, 'EVENT_NOT_FOUND', 'The requested event does not exist');
     }
+
+    await this.cache?.set(event);
     return event;
   }
 }
