@@ -106,4 +106,48 @@ describe('graceful HTTP shutdown', () => {
     await expect(responsePromise).resolves.toBeInstanceOf(Error);
     expect(closeDependencies).toHaveBeenCalledOnce();
   });
+
+  it('closes a live SSE response before waiting for HTTP drain and dependencies', async () => {
+    const streamStarted = createDeferred();
+    let closeStream!: () => void;
+    const app = express();
+    app.get('/stream', (_request, response) => {
+      response.setHeader('content-type', 'text/event-stream');
+      response.flushHeaders();
+      closeStream = () => response.end('event: stream.closed\ndata: {}\n\n');
+      streamStarted.resolve();
+    });
+
+    const server = createServer(app);
+    servers.push(server);
+    const port = await listen(server);
+    const responsePromise = fetch(`http://127.0.0.1:${String(port)}/stream`);
+    await streamStarted.promise;
+    const response = await responsePromise;
+    const bodyPromise = response.text();
+    const closeLongLivedConnections = vi.fn(() => {
+      closeStream();
+    });
+    const closeDependencies = vi.fn().mockResolvedValue(undefined);
+    const shutdown = createGracefulShutdown({
+      server,
+      state: { started: false },
+      logger: pino({ enabled: false }),
+      timeoutMs: 1_000,
+      closeLongLivedConnections,
+      closeDependencies,
+    });
+
+    const firstShutdown = shutdown.shutdown('SIGTERM');
+    const repeatedShutdown = shutdown.shutdown('SIGINT');
+
+    await expect(bodyPromise).resolves.toContain('event: stream.closed');
+    await expect(firstShutdown).resolves.toEqual({ forced: false });
+    expect(repeatedShutdown).toBe(firstShutdown);
+    expect(closeLongLivedConnections).toHaveBeenCalledOnce();
+    expect(closeDependencies).toHaveBeenCalledOnce();
+    expect(closeLongLivedConnections.mock.invocationCallOrder[0]).toBeLessThan(
+      closeDependencies.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
 });

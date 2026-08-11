@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+
+import type { RealtimeWakeupPublisher } from '../realtime/realtime.types.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import {
   type ReservationsRepository,
@@ -10,7 +13,6 @@ import type {
   ReservationSummary,
   WaitlistSummary,
 } from './reservations.types.js';
-import { createHash } from 'node:crypto';
 
 const hashRequest = (eventId: string, userId: string): string =>
   createHash('sha256')
@@ -18,7 +20,10 @@ const hashRequest = (eventId: string, userId: string): string =>
     .digest('hex');
 
 export class ReservationsService {
-  public constructor(private readonly repository: ReservationsRepository) {}
+  public constructor(
+    private readonly repository: ReservationsRepository,
+    private readonly realtime?: RealtimeWakeupPublisher,
+  ) {}
 
   private async createAttendance(
     transaction: ReservationTransactionRepository,
@@ -40,24 +45,28 @@ export class ReservationsService {
       throw new AppError(409, 'ALREADY_WAITLISTED', 'You are already waiting');
     }
 
+    let outcome: AttendanceOutcome;
     if ((await transaction.countConfirmed(event.id)) < event.capacity) {
       const reservationId = await transaction.insertConfirmed(event.id, userId);
       await transaction.insertNotification(userId, event.id, 'RESERVATION_CONFIRMED');
-      return { attendanceStatus: 'CONFIRMED', reservationId };
+      outcome = { attendanceStatus: 'CONFIRMED', reservationId };
+    } else {
+      const entry = await transaction.insertWaiting(event.id, userId);
+      const position = await transaction.calculatePosition(event.id, entry.joinedAt, entry.id);
+      await transaction.insertNotification(userId, event.id, 'WAITLIST_JOINED');
+      outcome = { attendanceStatus: 'WAITLISTED', waitlistEntryId: entry.id, position };
     }
 
-    const entry = await transaction.insertWaiting(event.id, userId);
-    const position = await transaction.calculatePosition(event.id, entry.joinedAt, entry.id);
-    await transaction.insertNotification(userId, event.id, 'WAITLIST_JOINED');
-    return { attendanceStatus: 'WAITLISTED', waitlistEntryId: entry.id, position };
+    await transaction.insertAttendanceRealtimeEvent(event.communityId, event.id);
+    return outcome;
   }
 
-  public reserve(
+  public async reserve(
     eventId: string,
     userId: string,
     idempotencyKey: string,
   ): Promise<ReservationCommandResult> {
-    return this.repository.inTransaction(async (transaction) => {
+    const result = await this.repository.inTransaction(async (transaction) => {
       const event = await transaction.lockEvent(eventId);
       if (event === null) {
         throw new AppError(404, 'EVENT_NOT_FOUND', 'The requested event does not exist');
@@ -77,10 +86,16 @@ export class ReservationsService {
       }
       if (claim.kind === 'REPLAY') return { status: claim.status, body: claim.body };
 
-      const result = { status: 201, body: await this.createAttendance(transaction, event, userId) };
-      await transaction.completeIdempotency(claim.id, result);
-      return result;
+      const commandResult = {
+        status: 201,
+        body: await this.createAttendance(transaction, event, userId),
+      };
+      await transaction.completeIdempotency(claim.id, commandResult);
+      return commandResult;
     });
+
+    this.realtime?.wake();
+    return result;
   }
 
   public async getReservation(eventId: string, userId: string): Promise<ReservationSummary> {
@@ -99,8 +114,8 @@ export class ReservationsService {
     return entry;
   }
 
-  public cancelReservation(eventId: string, userId: string): Promise<void> {
-    return this.repository.inTransaction(async (transaction) => {
+  public async cancelReservation(eventId: string, userId: string): Promise<void> {
+    await this.repository.inTransaction(async (transaction) => {
       const event = await transaction.lockEvent(eventId);
       if (event === null) {
         throw new AppError(404, 'EVENT_NOT_FOUND', 'The requested event does not exist');
@@ -110,17 +125,29 @@ export class ReservationsService {
       }
 
       const entry = await transaction.findFirstWaiting(eventId);
-      if (entry === null) return;
-
-      await transaction.promoteWaitlistEntry(entry.id);
-      await transaction.insertPromotedReservation(eventId, entry.userId);
-      await transaction.insertPromotionNotification(entry.userId, eventId);
+      if (entry !== null) {
+        await transaction.promoteWaitlistEntry(entry.id);
+        await transaction.insertPromotedReservation(eventId, entry.userId);
+        await transaction.insertPromotionNotification(entry.userId, eventId);
+      }
+      await transaction.insertAttendanceRealtimeEvent(event.communityId, event.id);
     });
+
+    this.realtime?.wake();
   }
 
   public async cancelWaitlist(eventId: string, userId: string): Promise<void> {
-    if (!(await this.repository.cancelWaiting(eventId, userId))) {
-      throw new AppError(404, 'WAITLIST_ENTRY_NOT_FOUND', 'No active waitlist entry exists');
-    }
+    await this.repository.inTransaction(async (transaction) => {
+      const event = await transaction.lockEvent(eventId);
+      if (event === null) {
+        throw new AppError(404, 'EVENT_NOT_FOUND', 'The requested event does not exist');
+      }
+      if (!(await transaction.cancelWaiting(eventId, userId))) {
+        throw new AppError(404, 'WAITLIST_ENTRY_NOT_FOUND', 'No active waitlist entry exists');
+      }
+      await transaction.insertAttendanceRealtimeEvent(event.communityId, event.id);
+    });
+
+    this.realtime?.wake();
   }
 }

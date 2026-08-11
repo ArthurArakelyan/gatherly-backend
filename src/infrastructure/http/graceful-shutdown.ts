@@ -11,6 +11,7 @@ interface GracefulShutdownDependencies {
   state: ShutdownState;
   logger: Logger;
   timeoutMs: number;
+  closeLongLivedConnections?: () => Promise<void> | void;
   closeDependencies: () => Promise<void>;
 }
 
@@ -52,6 +53,8 @@ export const createGracefulShutdown = (
         timeout.unref();
 
         try {
+          const closeLongLivedConnections = dependencies.closeLongLivedConnections?.();
+          if (closeLongLivedConnections !== undefined) await closeLongLivedConnections;
           await closeServer(dependencies.server);
           await dependencies.closeDependencies();
           dependencies.logger.info({ forced }, 'Graceful shutdown completed');

@@ -710,6 +710,13 @@ implementation guide in
 It deliberately stops before SSE, WebSockets, Elasticsearch, and Kafka so each
 later technology still needs a concrete lesson and product use.
 
+Continue with the build-it-yourself SSE implementation guide in
+[`PHASE_6_SSE_HANDBOOK.md`](./PHASE_6_SSE_HANDBOOK.md). It adds durable
+PostgreSQL replay, authenticated notification and organizer-counter streams,
+Redis Pub/Sub wake-ups, reconnection, heartbeat, authorization rechecks, and
+graceful cleanup. Automated test implementation is isolated in a final AI
+handoff checkpoint so the transport remains a user-led learning exercise.
+
 Do not add Kubernetes or split the modular monolith into microservices for this project.
 
 ### Late-stage deployment question

@@ -36,6 +36,7 @@ export const startPostgresHarness = async (): Promise<PostgresHarness> => {
     reset: async () => {
       await pool.query(`
         TRUNCATE TABLE
+          realtime_events,
           notifications,
           idempotency_keys,
           waitlist_entries,

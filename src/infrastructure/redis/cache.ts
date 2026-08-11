@@ -36,8 +36,8 @@ export class RedisCache {
     if (!this.client.isReady) return;
 
     try {
-      const serialized = JSON.stringify(value);
-      if (serialized === undefined) {
+      const serialized: unknown = JSON.stringify(value);
+      if (typeof serialized !== 'string') {
         this.logger.warn('Redis cache value could not be serialized');
         return;
       }

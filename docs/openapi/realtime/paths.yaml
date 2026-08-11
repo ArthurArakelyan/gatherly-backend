@@ -1,0 +1,31 @@
+stream:
+  get:
+    tags: [Realtime]
+    summary: Open the authenticated realtime event stream
+    description: |
+      Sends UTF-8 Server-Sent Events using bearer authentication. Reconnect
+      with the last successfully applied durable event ID in `Last-Event-ID`.
+      Durable events are delivered at least once from PostgreSQL; Redis carries
+      only cross-instance wake-up hints.
+    security: [{ bearerAuth: [] }]
+    parameters:
+      - name: Last-Event-ID
+        in: header
+        required: false
+        description: Decimal ID of the last durable event successfully applied by the client.
+        schema: { type: string, pattern: '^\d{1,19}$', example: '42' }
+    responses:
+      '200':
+        description: Long-lived SSE notification and organizer-counter stream.
+        headers:
+          Cache-Control:
+            schema: { type: string, example: 'no-cache, no-transform' }
+          X-Accel-Buffering:
+            schema: { type: string, enum: ['no'] }
+        content:
+          text/event-stream:
+            schema: { type: string }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
+      '429': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '503': { $ref: '../../openapi.yaml#/components/responses/Error' }

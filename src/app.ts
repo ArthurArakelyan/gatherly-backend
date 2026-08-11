@@ -19,6 +19,7 @@ export interface AppDependencies {
   eventsRouter: Router;
   reservationsRouter: Router;
   identityRouter: Router;
+  realtimeRouter?: Router;
 }
 
 export const createApp = (dependencies: AppDependencies): Express => {
@@ -51,6 +52,10 @@ export const createApp = (dependencies: AppDependencies): Express => {
   app.use('/api/communities', dependencies.membershipsRouter);
   app.use('/api', dependencies.eventsRouter);
   app.use('/api', dependencies.reservationsRouter);
+
+  if (dependencies.realtimeRouter !== undefined) {
+    app.use('/api', dependencies.realtimeRouter);
+  }
 
   app.use(notFoundHandler);
   app.use(createErrorHandler(dependencies.logger));

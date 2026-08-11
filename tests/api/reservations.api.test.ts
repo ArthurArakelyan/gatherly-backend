@@ -2,7 +2,13 @@ import type { Express } from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { aliceId, createCommunityFixture, createEventFixture } from '../fixtures/database.js';
+import {
+  addActiveMember,
+  aliceId,
+  bobId,
+  createCommunityFixture,
+  createEventFixture,
+} from '../fixtures/database.js';
 import { type PostgresHarness, startPostgresHarness } from '../helpers/postgres.js';
 import { authorizationFor, createTestApp } from '../helpers/test-app.js';
 
@@ -94,5 +100,80 @@ describe('reservations API', () => {
       [eventId, aliceId],
     );
     expect(state.rows[0]).toEqual({ reservations: 0, waitlist: 0 });
+  });
+
+  it('reads and cancels the confirmed reservation created by the same authenticated user', async () => {
+    const communityId = await createCommunityFixture(harness.pool);
+    const eventId = await createEventFixture(harness.pool, communityId);
+    const authorization = authorizationFor(aliceId);
+
+    const created = await request(app)
+      .post(`/api/events/${eventId}/reservations`)
+      .set('authorization', authorization)
+      .set('Idempotency-Key', 'confirmed-read-delete')
+      .send({});
+
+    expect(created.status).toBe(201);
+    expect((created.body as { data: { attendanceStatus: string } }).data.attendanceStatus).toBe(
+      'CONFIRMED',
+    );
+
+    const found = await request(app)
+      .get(`/api/events/${eventId}/reservations/me`)
+      .set('authorization', authorization);
+    expect(found.status).toBe(200);
+    expect((found.body as { data: { status: string } }).data.status).toBe('CONFIRMED');
+
+    const cancelled = await request(app)
+      .delete(`/api/events/${eventId}/reservations/me`)
+      .set('authorization', authorization);
+    expect(cancelled.status).toBe(204);
+
+    const missing = await request(app)
+      .get(`/api/events/${eventId}/reservations/me`)
+      .set('authorization', authorization);
+    expect(missing.status).toBe(404);
+    expect((missing.body as { error: { code: string } }).error.code).toBe('RESERVATION_NOT_FOUND');
+  });
+
+  it('uses the waitlist resource when a full event returns WAITLISTED', async () => {
+    const communityId = await createCommunityFixture(harness.pool);
+    await addActiveMember(harness.pool, communityId, bobId);
+    const eventId = await createEventFixture(harness.pool, communityId, aliceId, 1);
+    await request(app)
+      .post(`/api/events/${eventId}/reservations`)
+      .set('authorization', authorizationFor(aliceId))
+      .set('Idempotency-Key', 'fill-event')
+      .send({});
+
+    const authorization = authorizationFor(bobId);
+    const created = await request(app)
+      .post(`/api/events/${eventId}/reservations`)
+      .set('authorization', authorization)
+      .set('Idempotency-Key', 'bob-waitlisted')
+      .send({});
+    expect(created.status).toBe(201);
+    expect((created.body as { data: { attendanceStatus: string } }).data.attendanceStatus).toBe(
+      'WAITLISTED',
+    );
+
+    const noReservation = await request(app)
+      .get(`/api/events/${eventId}/reservations/me`)
+      .set('authorization', authorization);
+    expect(noReservation.status).toBe(404);
+
+    const waitlist = await request(app)
+      .get(`/api/events/${eventId}/waitlist/me`)
+      .set('authorization', authorization);
+    expect(waitlist.status).toBe(200);
+    expect((waitlist.body as { data: { status: string; position: number } }).data).toMatchObject({
+      status: 'WAITING',
+      position: 1,
+    });
+
+    const cancelled = await request(app)
+      .delete(`/api/events/${eventId}/waitlist/me`)
+      .set('authorization', authorization);
+    expect(cancelled.status).toBe(204);
   });
 });

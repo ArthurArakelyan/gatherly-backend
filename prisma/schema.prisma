@@ -24,6 +24,7 @@ model User {
   waitlistEntries WaitlistEntry[]
   notifications   Notification[]
   idempotencyKeys IdempotencyKey[]
+  realtimeEvents RealtimeEvent[] @relation("RealtimeUserAudience")
 
   @@map("users")
 }
@@ -44,9 +45,25 @@ model Community {
   creator         User                  @relation("CommunityCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   memberships     CommunityMembership[]
   events          Event[]
+  realtimeEvents RealtimeEvent[] @relation("RealtimeCommunityAudience")
 
   @@index([status, createdAt(sort: Desc), id(sort: Desc)], map: "communities_status_created_idx")
   @@map("communities")
+}
+
+model RealtimeEvent {
+  id             BigInt     @id @default(autoincrement())
+  type           String
+  audienceUserId String?    @map("audience_user_id") @db.Uuid
+  communityId    String?    @map("community_id") @db.Uuid
+  payload        Json       @db.JsonB
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  audienceUser   User?      @relation("RealtimeUserAudience", fields: [audienceUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  community      Community? @relation("RealtimeCommunityAudience", fields: [communityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([audienceUserId, id], map: "realtime_events_user_id_idx")
+  @@index([communityId, id], map: "realtime_events_community_id_idx")
+  @@map("realtime_events")
 }
 
 model CommunityMembership {

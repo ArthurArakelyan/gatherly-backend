@@ -21,6 +21,16 @@ const environmentSchema = z.object({
   }),
   REDIS_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(1_000),
   EVENT_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(3_600).default(60),
+  SSE_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(5_000).max(60_000).default(15_000),
+  SSE_RETRY_MS: z.coerce.number().int().min(500).max(30_000).default(3_000),
+  SSE_REPLAY_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
+  SSE_MAX_CONNECTIONS_PER_USER: z.coerce.number().int().min(1).max(10).default(3),
+  SSE_MAX_CONNECTION_DURATION_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(86_400_000)
+    .default(600_000),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;

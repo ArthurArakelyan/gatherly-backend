@@ -45,6 +45,11 @@ import {
 } from './modules/identity/identity.rate-limits.js';
 import { RedisFixedWindowRateLimiter } from './infrastructure/redis/redis-fixed-window-rate-limiter.js';
 import { createDistributedRateLimit } from './shared/rate-limit/rate-limit.middleware.js';
+import { RedisRealtimeBus, createRealtimeSubscriber } from './infrastructure/redis/realtime-bus.js';
+import { RealtimeController } from './modules/realtime/realtime.controller.js';
+import { RealtimeRepository } from './modules/realtime/realtime.repository.js';
+import { createRealtimeRouter } from './modules/realtime/realtime.routes.js';
+import { RealtimeService } from './modules/realtime/realtime.service.js';
 
 const pinoConfig = {
   redact: {
@@ -103,6 +108,24 @@ const identityRouter = createIdentityRouter(
   identityRateLimiters,
 );
 
+const realtimeRepository = new RealtimeRepository(pool);
+const realtimeService = new RealtimeService(realtimeRepository, logger, {
+  heartbeatIntervalMs: environment.SSE_HEARTBEAT_INTERVAL_MS,
+  retryMs: environment.SSE_RETRY_MS,
+  replayBatchSize: environment.SSE_REPLAY_BATCH_SIZE,
+  maxConnectionsPerUser: environment.SSE_MAX_CONNECTIONS_PER_USER,
+  maxConnectionDurationMs: environment.SSE_MAX_CONNECTION_DURATION_MS,
+});
+const realtimeSubscriber = createRealtimeSubscriber(redis, logger);
+const realtimeBus = new RedisRealtimeBus(redis, realtimeSubscriber, realtimeService, logger);
+
+realtimeBus.start();
+
+const realtimeRouter = createRealtimeRouter(
+  new RealtimeController(realtimeService),
+  requireAuthenticatedUser,
+);
+
 const communitiesRepository = new CommunitiesRepository(prisma);
 const communitiesService = new CommunitiesService(communitiesRepository);
 const communitiesRouter = createCommunitiesRouter(
@@ -126,7 +149,7 @@ const eventsRouter = createEventsRouter(
 );
 
 const reservationsRepository = new ReservationsRepository(pool);
-const reservationsService = new ReservationsService(reservationsRepository);
+const reservationsService = new ReservationsService(reservationsRepository, realtimeBus);
 const reservationsRouter = createReservationsRouter(
   new ReservationsController(reservationsService),
   requireAuthenticatedUser,
@@ -157,6 +180,7 @@ const app = createApp({
   eventsRouter,
   reservationsRouter,
   identityRouter,
+  realtimeRouter,
 });
 
 const server = createServer(app);
@@ -170,8 +194,16 @@ const gracefulShutdown = createGracefulShutdown({
   state: shutdownState,
   logger,
   timeoutMs: 10_000,
+  closeLongLivedConnections: () => {
+    realtimeService.shutdown();
+  },
   closeDependencies: async () => {
-    await Promise.all([closeRedisClient(redis), prisma.$disconnect(), pool.end()]);
+    await Promise.all([
+      realtimeBus.close(),
+      closeRedisClient(redis),
+      prisma.$disconnect(),
+      pool.end(),
+    ]);
   },
 });
 

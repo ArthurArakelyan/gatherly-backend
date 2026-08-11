@@ -15,6 +15,7 @@ communities/   Community creation, listing, and lookup
 memberships/   Join and leave transitions
 events/        Event creation and public reads
 reservations/  Reservation, waitlist, cancellation, and idempotency behavior
+realtime/      Authenticated SSE replay, notification, and organizer-counter stream
 ```
 
 Update the module's `paths.yaml` and its matching API/integration test whenever

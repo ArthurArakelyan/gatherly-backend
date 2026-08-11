@@ -109,16 +109,94 @@ export class ReservationTransactionRepository {
     return result.rows[0]?.position ?? 1;
   }
 
+  public async cancelWaiting(eventId: string, userId: string): Promise<boolean> {
+    const result = await this.client.query(
+      `UPDATE waitlist_entries
+       SET status = 'CANCELLED', cancelled_at = now(), updated_at = now()
+       WHERE event_id = $1 AND user_id = $2 AND status = 'WAITING'
+         RETURNING id`,
+      [eventId, userId],
+    );
+    return result.rowCount === 1;
+  }
+
   public async insertNotification(
     userId: string,
     eventId: string,
     type: 'RESERVATION_CONFIRMED' | 'WAITLIST_JOINED',
   ): Promise<void> {
     const title = type === 'RESERVATION_CONFIRMED' ? 'Reservation confirmed' : 'Added to waitlist';
-    await this.client.query(
+    const result = await this.client.query<{
+      id: string;
+      type: string;
+      title: string;
+      message: string;
+      data: Record<string, unknown>;
+      created_at: Date;
+    }>(
       `INSERT INTO notifications (user_id, type, title, message, data)
-       VALUES ($1, $2, $3, $3, jsonb_build_object('eventId', $4::text))`,
+       VALUES ($1, $2, $3, $3, jsonb_build_object('eventId', $4::text))
+       RETURNING id, type, title, message, data, created_at`,
       [userId, type, title, eventId],
+    );
+    const notification = result.rows[0];
+    if (notification === undefined) throw new Error('Notification insert returned no row');
+
+    await this.insertNotificationRealtimeEvent(userId, notification);
+  }
+
+  private async insertNotificationRealtimeEvent(
+    userId: string,
+    notification: {
+      id: string;
+      type: string;
+      title: string;
+      message: string;
+      data: Record<string, unknown>;
+      created_at: Date;
+    },
+  ): Promise<void> {
+    await this.client.query(
+      `INSERT INTO realtime_events (type, audience_user_id, payload)
+       VALUES ('notification.created', $1, $2::jsonb)`,
+      [
+        userId,
+        JSON.stringify({
+          notification: {
+            id: notification.id,
+            type: notification.type,
+            title: notification.title,
+            message: notification.message,
+            data: notification.data,
+            readAt: null,
+            createdAt: notification.created_at.toISOString(),
+          },
+        }),
+      ],
+    );
+  }
+
+  public async insertAttendanceRealtimeEvent(communityId: string, eventId: string): Promise<void> {
+    await this.client.query(
+      `INSERT INTO realtime_events (type, community_id, payload)
+       SELECT 'event.attendance.updated', $1::uuid,
+              jsonb_build_object(
+                'eventId', event_record.id::text,
+                'confirmedCount', (
+                  SELECT count(*)::integer
+                  FROM reservations
+                  WHERE event_id = event_record.id AND status = 'CONFIRMED'
+                ),
+                'waitingCount', (
+                  SELECT count(*)::integer
+                  FROM waitlist_entries
+                  WHERE event_id = event_record.id AND status = 'WAITING'
+                ),
+                'capacity', event_record.capacity
+              )
+       FROM events AS event_record
+       WHERE event_record.id = $2::uuid`,
+      [communityId, eventId],
     );
   }
 
@@ -163,12 +241,23 @@ export class ReservationTransactionRepository {
   }
 
   public async insertPromotionNotification(userId: string, eventId: string): Promise<void> {
-    await this.client.query(
+    const result = await this.client.query<{
+      id: string;
+      type: string;
+      title: string;
+      message: string;
+      data: Record<string, unknown>;
+      created_at: Date;
+    }>(
       `INSERT INTO notifications (user_id, type, title, message, data)
-     VALUES ($1, 'WAITLIST_PROMOTED', 'Reservation confirmed',
-             'A place became available', jsonb_build_object('eventId', $2::text))`,
+       VALUES ($1, 'WAITLIST_PROMOTED', 'Reservation confirmed',
+               'A place became available', jsonb_build_object('eventId', $2::text))
+       RETURNING id, type, title, message, data, created_at`,
       [userId, eventId],
     );
+    const notification = result.rows[0];
+    if (notification === undefined) throw new Error('Notification insert returned no row');
+    await this.insertNotificationRealtimeEvent(userId, notification);
   }
 
   public async claimIdempotency(
@@ -265,16 +354,5 @@ export class ReservationsRepository {
     return row === undefined
       ? null
       : { id: row.id, status: row.status, joinedAt: row.joined_at, position: row.position };
-  }
-
-  public async cancelWaiting(eventId: string, userId: string): Promise<boolean> {
-    const result = await this.pool.query(
-      `UPDATE waitlist_entries
-     SET status = 'CANCELLED', cancelled_at = now(), updated_at = now()
-     WHERE event_id = $1 AND user_id = $2 AND status = 'WAITING'
-     RETURNING id`,
-      [eventId, userId],
-    );
-    return result.rowCount === 1;
   }
 }

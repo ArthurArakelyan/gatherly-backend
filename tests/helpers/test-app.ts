@@ -21,6 +21,10 @@ import { ReservationsController } from '../../src/modules/reservations/reservati
 import { ReservationsRepository } from '../../src/modules/reservations/reservations.repository.js';
 import { createReservationsRouter } from '../../src/modules/reservations/reservations.routes.js';
 import { ReservationsService } from '../../src/modules/reservations/reservations.service.js';
+import { RealtimeController } from '../../src/modules/realtime/realtime.controller.js';
+import { createRealtimeRouter } from '../../src/modules/realtime/realtime.routes.js';
+import type { RealtimeService } from '../../src/modules/realtime/realtime.service.js';
+import type { RealtimeWakeupPublisher } from '../../src/modules/realtime/realtime.types.js';
 import { Argon2PasswordHasher } from '../../src/infrastructure/security/argon2-password-hasher.js';
 import { JwtAccessTokens } from '../../src/infrastructure/security/jwt-access-tokens.js';
 import { IdentityController } from '../../src/modules/identity/identity.controller.js';
@@ -43,6 +47,8 @@ interface TestDatabase {
 interface TestAppDependencies {
   eventCache?: EventCache;
   identityRateLimiters?: IdentityRateLimiters;
+  realtimeService?: RealtimeService;
+  realtimeWakeupPublisher?: RealtimeWakeupPublisher;
 }
 
 const testAccessTokens = new JwtAccessTokens({
@@ -88,9 +94,21 @@ export const createTestApp = (
     requireAuthenticatedUser,
   );
   const reservationsRouter = createReservationsRouter(
-    new ReservationsController(new ReservationsService(new ReservationsRepository(pool))),
+    new ReservationsController(
+      new ReservationsService(
+        new ReservationsRepository(pool),
+        dependencies.realtimeWakeupPublisher,
+      ),
+    ),
     requireAuthenticatedUser,
   );
+  const realtimeRouter =
+    dependencies.realtimeService === undefined
+      ? undefined
+      : createRealtimeRouter(
+          new RealtimeController(dependencies.realtimeService),
+          requireAuthenticatedUser,
+        );
 
   return createApp({
     corsOrigin: 'http://localhost:5173',
@@ -103,5 +121,6 @@ export const createTestApp = (
     eventsRouter,
     reservationsRouter,
     identityRouter,
+    ...(realtimeRouter === undefined ? {} : { realtimeRouter }),
   });
 };

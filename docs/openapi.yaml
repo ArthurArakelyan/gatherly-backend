@@ -3,7 +3,9 @@ info:
   title: Gatherly API
   version: 0.1.0
   description: |
-    The implemented Phase 4 API. PostgreSQL is the durable source of truth.
+    The implemented API through the Phase 6 SSE increment. PostgreSQL is the
+    durable source of truth; Redis accelerates disposable cache, throttling,
+    and cross-instance realtime wake-ups.
 
     Identity is deliberately minimal: sign up or sign in with a username and
     password, then send the returned JWT in `Authorization: Bearer <token>` for
@@ -23,6 +25,8 @@ tags:
     description: Public event discovery and authorized event creation.
   - name: Reservations
     description: Authenticated, capacity-safe reservations, waitlists, cancellation, and idempotency.
+  - name: Realtime
+    description: Authenticated one-way notification and organizer updates over SSE.
 paths:
   /health/live:
     get:
@@ -271,7 +275,9 @@ paths:
       description: |
         Requires an active community membership and an `Idempotency-Key`.
         Reusing a completed key returns its original outcome; an in-progress or
-        differently reused key is rejected.
+        differently reused key is rejected. A `CONFIRMED` result is available
+        through `/api/events/{eventId}/reservations/me`; a `WAITLISTED` result
+        is available through `/api/events/{eventId}/waitlist/me` instead.
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/EventId'
@@ -291,6 +297,7 @@ paths:
     get:
       tags: [Reservations]
       summary: Get the caller's active confirmed reservation
+      description: Returns only a `CONFIRMED` reservation. Use the waitlist endpoint after a `WAITLISTED` creation result.
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/EventId'
@@ -318,6 +325,7 @@ paths:
     get:
       tags: [Reservations]
       summary: Get the caller's active waitlist entry
+      description: Use this resource when reservation creation returned `WAITLISTED`.
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/EventId'
@@ -341,6 +349,73 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/AuthenticationRequired' }
         '404': { $ref: '#/components/responses/Error' }
+  /api/realtime/stream:
+    get:
+      tags: [Realtime]
+      summary: Open the authenticated realtime event stream
+      description: |
+        Sends UTF-8 Server-Sent Events. Authenticate with the bearer token in
+        the `Authorization` header; do not place the token in the URL. A browser
+        client therefore uses streaming `fetch` rather than native EventSource.
+
+        After applying a durable event, reconnect with its SSE `id` in
+        `Last-Event-ID`. The server replays visible PostgreSQL journal rows with
+        greater IDs in ascending order. Delivery is at least once, so clients
+        deduplicate using the event ID.
+
+        Durable event names are `notification.created` for the authenticated
+        user and `event.attendance.updated` for current active OWNER, ORGANIZER,
+        or MODERATOR memberships. `stream.refresh-required` and `stream.closed`
+        are connection controls without durable IDs. Comment frames are
+        heartbeats.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Decimal ID of the last durable event successfully applied by the client.
+          schema:
+            type: string
+            pattern: '^\d{1,19}$'
+            example: '42'
+      responses:
+        '200':
+          description: Long-lived SSE stream with retry advice, heartbeats, and visible events.
+          headers:
+            Cache-Control:
+              description: Prevents caching and intermediary transformation.
+              schema: { type: string, example: 'no-cache, no-transform' }
+            X-Accel-Buffering:
+              description: Advises a future Nginx proxy not to buffer the stream.
+              schema: { type: string, enum: ['no'] }
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: |
+                retry: 3000
+
+                id: 42
+                event: notification.created
+                data: {"notification":{"id":"b9d1ef65-d5d2-4f52-bb7c-173819b739e4","type":"RESERVATION_CONFIRMED","title":"Reservation confirmed","message":"Reservation confirmed","data":{"eventId":"6a85187e-953a-46ac-b95f-44967f2615ba"},"readAt":null,"createdAt":"2026-08-12T10:00:00.000Z"}}
+
+                : heartbeat 2026-08-12T10:00:15.000Z
+
+        '400':
+          description: '`Last-Event-ID` is malformed, negative, or outside PostgreSQL BIGINT range.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '429':
+          description: Per-user live connection limit reached (`SSE_CONNECTION_LIMIT`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: The selected application instance is draining (`SERVER_DRAINING`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 components:
   securitySchemes:
     bearerAuth:

@@ -5,7 +5,9 @@ create:
     description: |
       Requires an active community membership, a bearer token, and an
       Idempotency-Key. Reusing a completed key returns its original outcome;
-      an in-progress or differently reused key is rejected.
+      an in-progress or differently reused key is rejected. Read a CONFIRMED
+      result through the reservation resource and a WAITLISTED result through
+      the waitlist resource.
     security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/EventId'
@@ -25,6 +27,7 @@ mine:
   get:
     tags: [Reservations]
     summary: Get the caller's active confirmed reservation
+    description: Returns only a CONFIRMED reservation, not an active waitlist entry.
     security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/EventId'
@@ -52,6 +55,7 @@ waitlist:
   get:
     tags: [Reservations]
     summary: Get the caller's active waitlist entry
+    description: Use this resource when reservation creation returned WAITLISTED.
     security: [{ bearerAuth: [] }]
     parameters:
       - $ref: '../../openapi.yaml#/components/parameters/EventId'
