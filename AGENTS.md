@@ -227,6 +227,14 @@ Favor behavioral confidence over an arbitrary coverage percentage.
 - Health endpoints are `/health/live` and `/health/ready`; metrics are exposed at `/metrics` when observability is introduced.
 - Graceful shutdown stops accepting work, drains active requests/connections within a bound, closes consumers/workers, and releases resources.
 - Useful future metrics include latency/errors, event-loop lag, DB pool saturation, reservation conflicts, waitlist size, outbox backlog, consumer lag, cache ratio, indexing failures, and live connection counts.
+- When search observability is introduced, record projection attempts, successes,
+  failures, and last-success time; alert on failures or sustained projection
+  staleness. Add a reconciliation check between eligible PostgreSQL events and
+  Elasticsearch documents because a best-effort post-commit update can be lost
+  during a process crash or Elasticsearch outage. Treat full reindexing as the
+  repair runbook, not routine synchronization, until a transactional outbox and
+  durable retry worker make projection delivery self-healing. Keep search
+  excluded from general readiness while it remains a non-critical projection.
 
 ## Scope control
 

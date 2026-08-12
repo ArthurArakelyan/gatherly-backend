@@ -53,3 +53,7 @@ export interface EventCreationAuthorization {
   membershipStatus: string | null;
   role: string | null;
 }
+
+export interface EventSearchProjection {
+  schedule(eventId: string): void;
+}

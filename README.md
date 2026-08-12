@@ -107,6 +107,36 @@ docker compose exec postgres psql -U gatherly -d gatherly -c "TABLE users;"
 docker compose exec -T postgres pg_dump -U gatherly -d gatherly > gatherly-backup.sql
 ```
 
+### Elasticsearch reindex commands
+
+The full rebuild reads canonical rows through `DATABASE_URL` and writes a new
+versioned Elasticsearch index before atomically moving the read/write aliases.
+Run it with application writers stopped:
+
+```powershell
+# Start the two required dependencies without starting the application writer
+docker compose -f compose.yaml -f compose.dev.yaml up --detach postgres elasticsearch
+
+# If the development application is already running, stop it during the rebuild
+docker compose -f compose.yaml -f compose.dev.yaml stop app
+
+# Uses DATABASE_URL, PRISMA_POOL_MAX, and ELASTICSEARCH_* from .env
+yarn search:reindex
+
+# Inspect the aliases through the configured published port
+$elasticAddress = docker compose -f compose.yaml -f compose.dev.yaml port elasticsearch 9200
+$elasticUrl = "http://$elasticAddress"
+Invoke-RestMethod -Uri "$elasticUrl/_cat/aliases?format=json"
+
+# Restart the application if it was running before the maintenance window
+docker compose -f compose.yaml -f compose.dev.yaml start app
+```
+
+The worker deliberately does not require the HTTP server's `PGHOST`,
+`PGDATABASE`, `PGUSER`, `PGPASSWORD`, JWT, Redis, SSE, or WebSocket variables.
+Deleting the Elasticsearch volume loses only this rebuildable projection; run
+the same command to reconstruct it from PostgreSQL.
+
 ### Cleanup and disk-space recovery
 
 First inspect what Docker is using:
@@ -251,7 +281,9 @@ Docker must be running for `yarn test`, `yarn test:api`, and
 - Tests: Vitest, V8 coverage, Supertest, Testcontainers, service-specific PostgreSQL/Redis/Kafka/Elasticsearch containers, and required type packages.
 - Code quality: ESLint flat config, TypeScript-ESLint, Prettier, and ESLint’s Prettier compatibility config.
 
-The later-phase clients are installed and locked, but deliberately remain unconfigured and unused until their learning phase:
+Infrastructure clients are activated only when their roadmap increment is
+implemented. PostgreSQL, Prisma, Redis, WebSockets, and Elasticsearch are now
+configured; Kafka and OpenTelemetry remain deferred:
 
 ```text
 Raw PostgreSQL phase  pg
@@ -259,12 +291,14 @@ Prisma phase          prisma + @prisma/client
 Integration tests     Testcontainers service modules
 Redis phase           redis
 WebSocket phase       ws
-Elasticsearch phase   @elastic/elasticsearch
-Kafka phase           kafkajs
-OpenTelemetry phase   Node SDK, auto-instrumentation, Pino instrumentation, OTLP exporters
+Elasticsearch phase   @elastic/elasticsearch (active)
+Kafka phase           kafkajs (deferred)
+OpenTelemetry phase   Node SDK, auto-instrumentation, Pino instrumentation, OTLP exporters (deferred)
 ```
 
-Having a package installed does not move that technology earlier in the roadmap. Do not initialize, configure, connect, or introduce it into application code until its phase begins or the user explicitly asks.
+Having a package installed does not move that technology earlier in the
+roadmap. Do not initialize or connect a deferred client until its phase begins
+or the user explicitly asks.
 
 ## Product focus
 
@@ -727,6 +761,27 @@ leased presence, ping/pong liveness, backpressure limits, reconnect recovery,
 and graceful upgraded-socket cleanup. Its automated tests are likewise kept in
 a final AI handoff checkpoint after the learner implements and manually
 inspects the protocol.
+
+Next use the build-it-yourself Elasticsearch event-discovery guide in
+[`PHASE_6_ELASTICSEARCH_HANDBOOK.md`](./PHASE_6_ELASTICSEARCH_HANDBOOK.md). It
+adds a strict rebuildable public-event projection, versioned indices and atomic
+aliases, typo-tolerant search, autocomplete, filters, facets, PIT cursor
+pagination, best-effort post-commit indexing, a full maintenance-window
+reindex command, and explicit search-outage behavior. PostgreSQL remains the
+source of truth, and Kafka stays deferred to its own later increment.
+
+When observability is introduced later, add explicit search-projection signals:
+attempt, success, and failure counters; last-success time; failure alerts; and a
+scheduled reconciliation check comparing eligible PostgreSQL events with the
+Elasticsearch projection. A stable application version does not make an index
+decay by itself, but a process crash or Elasticsearch outage can lose the
+current best-effort post-commit update and leave a missing, stale, or ineligible
+document. The operational runbook should rebuild after detected drift or a
+search outage; it should not blindly reindex on every deployment or schedule.
+A later transactional outbox and durable retry worker should make normal
+projection delivery self-healing, with reindex retained for schema changes and
+disaster recovery. Elasticsearch remains excluded from general readiness so a
+discovery outage does not take PostgreSQL-backed APIs out of service.
 
 Do not add Kubernetes or split the modular monolith into microservices for this project.
 

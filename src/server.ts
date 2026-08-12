@@ -59,6 +59,17 @@ import { ChatController } from './modules/chat/chat.controller.js';
 import { ChatRepository } from './modules/chat/chat.repository.js';
 import { createChatRouter } from './modules/chat/chat.routes.js';
 import { ChatService } from './modules/chat/chat.service.js';
+import {
+  closeElasticsearchClient,
+  createElasticsearchClient,
+} from './infrastructure/elasticsearch/client.js';
+import { EventSearchIndex } from './infrastructure/elasticsearch/event-search-index.js';
+import { BestEffortEventSearchProjector } from './modules/search/event-search-projector.js';
+import { EventSearchSourceRepository } from './modules/search/event-search-source.repository.js';
+import { SearchController } from './modules/search/search.controller.js';
+import { SearchRepository } from './modules/search/search.repository.js';
+import { createSearchRouter } from './modules/search/search.routes.js';
+import { SearchService } from './modules/search/search.service.js';
 
 const pinoConfig = {
   redact: {
@@ -86,6 +97,21 @@ const prisma = createPrismaClient(environment);
 pool.on('error', (error) => {
   logger.error({ err: error }, 'Idle PostgreSQL client failed');
 });
+
+const elasticsearch = createElasticsearchClient(environment, logger);
+const eventSearchSource = new EventSearchSourceRepository(prisma);
+const eventSearchIndex = new EventSearchIndex(
+  elasticsearch,
+  environment.ELASTICSEARCH_INDEX_PREFIX,
+  logger,
+);
+const eventSearchProjector = new BestEffortEventSearchProjector(
+  eventSearchSource,
+  eventSearchIndex,
+  logger,
+);
+const searchService = new SearchService(new SearchRepository(elasticsearch, logger));
+const searchRouter = createSearchRouter(new SearchController(searchService));
 
 const accessTokens = new JwtAccessTokens({
   secret: environment.JWT_SECRET,
@@ -173,7 +199,7 @@ const membershipsRouter = createMembershipsRouter(
 
 const eventsRepository = new EventsRepository(prisma);
 const eventCache = createEventCache(redisCache, environment.EVENT_CACHE_TTL_SECONDS);
-const eventsService = new EventsService(eventsRepository, eventCache);
+const eventsService = new EventsService(eventsRepository, eventCache, eventSearchProjector);
 const eventsRouter = createEventsRouter(
   new EventsController(eventsService),
   requireAuthenticatedUser,
@@ -213,6 +239,7 @@ const app = createApp({
   identityRouter,
   realtimeRouter,
   chatRouter,
+  searchRouter,
 });
 
 const server = createServer(app);
@@ -245,10 +272,12 @@ const gracefulShutdown = createGracefulShutdown({
     await chatWebSocketServer.shutdown();
   },
   closeDependencies: async () => {
+    await eventSearchProjector.drain();
     await Promise.all([
       chatBus.close(),
       realtimeBus.close(),
       closeRedisClient(redis),
+      closeElasticsearchClient(elasticsearch),
       prisma.$disconnect(),
       pool.end(),
     ]);

@@ -1,7 +1,13 @@
 import { AppError } from '../../shared/errors/app-error.js';
 import type { EventCache } from './events.cache.js';
 import type { EventsRepository } from './events.repository.js';
-import type { CreateEventInput, Event, EventFilters, EventPage } from './events.types.js';
+import type {
+  CreateEventInput,
+  Event,
+  EventFilters,
+  EventPage,
+  EventSearchProjection,
+} from './events.types.js';
 
 const creationRoles = new Set(['OWNER', 'ORGANIZER', 'MODERATOR']);
 
@@ -9,6 +15,7 @@ export class EventsService {
   public constructor(
     private readonly repository: EventsRepository,
     private readonly cache?: EventCache,
+    private readonly searchProjection?: EventSearchProjection,
   ) {}
 
   public async create(
@@ -32,7 +39,9 @@ export class EventsService {
       throw new AppError(400, 'INVALID_EVENT_TIME', 'Event end must be after its start');
     }
 
-    return this.repository.create(communityId, userId, input);
+    const event = await this.repository.create(communityId, userId, input);
+    this.searchProjection?.schedule(event.id);
+    return event;
   }
 
   public list(filters: EventFilters): Promise<EventPage> {

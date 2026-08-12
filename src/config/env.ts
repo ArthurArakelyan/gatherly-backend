@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { elasticsearchEnvironmentShape } from './elasticsearch-environment.js';
+
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
@@ -45,6 +47,7 @@ const environmentSchema = z.object({
   WS_COMMAND_LIMIT: z.coerce.number().int().min(1).max(1_000).default(30),
   WS_COMMAND_WINDOW_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
   WS_TYPING_TTL_MS: z.coerce.number().int().min(1_000).max(15_000).default(5_000),
+  ...elasticsearchEnvironmentShape,
 });
 
 export type Environment = z.infer<typeof environmentSchema>;

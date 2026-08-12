@@ -1,0 +1,53 @@
+events:
+  get:
+    tags: [Search]
+    summary: Search public published events
+    description: |
+      Searches a rebuildable Elasticsearch projection. PostgreSQL remains the
+      source of truth. Exact keyword filters are case-sensitive. The opaque
+      cursor holds a short-lived point-in-time snapshot and must be reused with
+      the same query and filters.
+    parameters:
+      - { name: q, in: query, schema: { type: string, minLength: 1, maxLength: 100 } }
+      - { name: communityId, in: query, schema: { type: string, format: uuid } }
+      - name: format
+        in: query
+        schema: { type: string, enum: [IN_PERSON, ONLINE, HYBRID] }
+      - { name: city, in: query, schema: { type: string, minLength: 1, maxLength: 100 } }
+      - { name: country, in: query, schema: { type: string, minLength: 1, maxLength: 100 } }
+      - { name: startsAfter, in: query, schema: { type: string, format: date-time } }
+      - { name: startsBefore, in: query, schema: { type: string, format: date-time } }
+      - { name: after, in: query, schema: { type: string, minLength: 1, maxLength: 8192 } }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+    responses:
+      '200':
+        description: Ranked search results, filtered facets, and an optional next cursor.
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/EventSearchResponse' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '503': { $ref: '../../openapi.yaml#/components/responses/SearchUnavailable' }
+
+suggestions:
+  get:
+    tags: [Search]
+    summary: Suggest upcoming public event titles
+    description: Uses title prefix fields and returns only upcoming projected events.
+    parameters:
+      - name: q
+        in: query
+        required: true
+        schema: { type: string, minLength: 2, maxLength: 80 }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 10, default: 8 }
+    responses:
+      '200':
+        description: Ranked title-prefix suggestions.
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/EventSuggestionResponse' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '503': { $ref: '../../openapi.yaml#/components/responses/SearchUnavailable' }

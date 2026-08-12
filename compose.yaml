@@ -48,6 +48,32 @@ services:
     pids_limit: 50
     mem_limit: 192m
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: 'false'
+      xpack.security.enrollment.enabled: 'false'
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - '127.0.0.1:${ELASTICSEARCH_PORT:-9200}:9200'
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'curl --fail --silent http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=1s > /dev/null',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 1g
+
   migration:
     build:
       context: .
@@ -89,6 +115,9 @@ services:
       SSE_REPLAY_BATCH_SIZE: ${SSE_REPLAY_BATCH_SIZE:-100}
       SSE_MAX_CONNECTIONS_PER_USER: ${SSE_MAX_CONNECTIONS_PER_USER:-3}
       SSE_MAX_CONNECTION_DURATION_MS: ${SSE_MAX_CONNECTION_DURATION_MS:-600000}
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_REQUEST_TIMEOUT_MS: ${ELASTICSEARCH_REQUEST_TIMEOUT_MS:-2000}
+      ELASTICSEARCH_INDEX_PREFIX: ${ELASTICSEARCH_INDEX_PREFIX:-gatherly-events}
     ports:
       - '127.0.0.1:${APP_PORT}:3000'
     depends_on:
@@ -120,3 +149,4 @@ services:
 
 volumes:
   postgres_data:
+  elasticsearch_data:

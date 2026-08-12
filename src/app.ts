@@ -21,6 +21,7 @@ export interface AppDependencies {
   identityRouter: Router;
   realtimeRouter?: Router;
   chatRouter?: Router;
+  searchRouter?: Router;
 }
 
 export const createApp = (dependencies: AppDependencies): Express => {
@@ -60,6 +61,10 @@ export const createApp = (dependencies: AppDependencies): Express => {
 
   if (dependencies.chatRouter !== undefined) {
     app.use('/api', dependencies.chatRouter);
+  }
+
+  if (dependencies.searchRouter !== undefined) {
+    app.use('/api', dependencies.searchRouter);
   }
 
   app.use(notFoundHandler);

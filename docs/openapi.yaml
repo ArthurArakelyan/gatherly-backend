@@ -3,9 +3,10 @@ info:
   title: Gatherly API
   version: 0.1.0
   description: |
-    The implemented API through the Phase 6 WebSocket chat increment. PostgreSQL is the
-    durable source of truth; Redis accelerates disposable cache, throttling,
-    and cross-instance realtime wake-ups.
+    The implemented API through the Phase 6 Elasticsearch event-discovery
+    increment. PostgreSQL is the durable source of truth; Redis accelerates
+    disposable cache, throttling, and cross-instance realtime wake-ups, while
+    Elasticsearch contains only a rebuildable public-event projection.
 
     Identity is deliberately minimal: sign up or sign in with a username and
     password, then send the returned JWT in `Authorization: Bearer <token>` for
@@ -29,6 +30,8 @@ tags:
     description: Authenticated one-way notification and organizer updates over SSE.
   - name: Chat
     description: WebSocket handshake tickets and durable event-chat history.
+  - name: Search
+    description: Public event discovery backed by a rebuildable Elasticsearch projection.
 paths:
   /health/live:
     get:
@@ -480,6 +483,58 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+  /api/search/events:
+    get:
+      tags: [Search]
+      summary: Search public published events
+      description: |
+        Searches a rebuildable Elasticsearch projection. PostgreSQL remains
+        the source of truth. Exact keyword filters are case-sensitive. The
+        opaque cursor holds a short-lived point-in-time snapshot and must be
+        reused with the same query and filters.
+      parameters:
+        - { name: q, in: query, schema: { type: string, minLength: 1, maxLength: 100 } }
+        - { name: communityId, in: query, schema: { type: string, format: uuid } }
+        - name: format
+          in: query
+          schema: { type: string, enum: [IN_PERSON, ONLINE, HYBRID] }
+        - { name: city, in: query, schema: { type: string, minLength: 1, maxLength: 100 } }
+        - { name: country, in: query, schema: { type: string, minLength: 1, maxLength: 100 } }
+        - { name: startsAfter, in: query, schema: { type: string, format: date-time } }
+        - { name: startsBefore, in: query, schema: { type: string, format: date-time } }
+        - { name: after, in: query, schema: { type: string, minLength: 1, maxLength: 8192 } }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: Ranked search results, filtered facets, and an optional next cursor.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventSearchResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/SearchUnavailable' }
+  /api/search/events/suggestions:
+    get:
+      tags: [Search]
+      summary: Suggest upcoming public event titles
+      description: Uses title prefix fields and returns only upcoming projected events.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 80 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10, default: 8 }
+      responses:
+        '200':
+          description: Ranked title-prefix suggestions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventSuggestionResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/SearchUnavailable' }
 components:
   securitySchemes:
     bearerAuth:
@@ -684,6 +739,103 @@ components:
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/Event' } }
         pagination: { $ref: '#/components/schemas/Pagination' }
+    SearchEvent:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          communityId,
+          communityName,
+          communitySlug,
+          communityCity,
+          communityCountry,
+          title,
+          description,
+          format,
+          startsAt,
+          endsAt,
+          timezone,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        communityId: { type: string, format: uuid }
+        communityName: { type: string }
+        communitySlug: { type: string }
+        communityCity: { type: string, nullable: true }
+        communityCountry: { type: string, nullable: true }
+        title: { type: string }
+        description: { type: string }
+        format: { type: string, enum: [IN_PERSON, ONLINE, HYBRID] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        timezone: { type: string }
+        updatedAt: { type: string, format: date-time }
+    SearchFacetBucket:
+      type: object
+      additionalProperties: false
+      required: [value, count]
+      properties:
+        value: { type: string }
+        count: { type: integer, minimum: 0 }
+    EventSearchFacets:
+      type: object
+      additionalProperties: false
+      required: [formats, cities, countries]
+      properties:
+        formats:
+          type: array
+          items: { $ref: '#/components/schemas/SearchFacetBucket' }
+        cities:
+          type: array
+          items: { $ref: '#/components/schemas/SearchFacetBucket' }
+        countries:
+          type: array
+          items: { $ref: '#/components/schemas/SearchFacetBucket' }
+    EventSearchHit:
+      type: object
+      additionalProperties: false
+      required: [event, score]
+      properties:
+        event: { $ref: '#/components/schemas/SearchEvent' }
+        score: { type: number, nullable: true }
+    EventSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [data, pagination, facets]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/EventSearchHit' }
+        pagination:
+          type: object
+          additionalProperties: false
+          required: [total, nextCursor]
+          properties:
+            total: { type: integer, minimum: 0 }
+            nextCursor:
+              type: string
+              nullable: true
+              description: Opaque PIT/search-after cursor for the next page.
+        facets: { $ref: '#/components/schemas/EventSearchFacets' }
+    EventSuggestion:
+      type: object
+      additionalProperties: false
+      required: [id, title, communityName, startsAt]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        communityName: { type: string }
+        startsAt: { type: string, format: date-time }
+    EventSuggestionResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/EventSuggestion' }
     CreateEvent:
       type: object
       additionalProperties: false
@@ -846,6 +998,11 @@ components:
         RateLimit-Remaining: { $ref: '#/components/headers/RateLimitRemaining' }
         RateLimit-Reset: { $ref: '#/components/headers/RateLimitReset' }
         RateLimit-Policy: { $ref: '#/components/headers/RateLimitPolicy' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SearchUnavailable:
+      description: Elasticsearch discovery is unavailable or its projection is invalid (`SEARCH_UNAVAILABLE` or `SEARCH_INDEX_INVALID`).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }

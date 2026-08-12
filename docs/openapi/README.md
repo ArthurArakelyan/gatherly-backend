@@ -17,6 +17,7 @@ events/        Event creation and public reads
 reservations/  Reservation, waitlist, cancellation, and idempotency behavior
 realtime/      Authenticated SSE replay, notification, and organizer-counter stream
 chat/          One-use WebSocket ticket issuance and durable event-chat history
+search/        Public Elasticsearch event discovery and title suggestions
 ```
 
 Update the module's `paths.yaml` and its matching API/integration test whenever

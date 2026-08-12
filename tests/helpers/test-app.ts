@@ -13,6 +13,7 @@ import type { EventCache } from '../../src/modules/events/events.cache.js';
 import { EventsRepository } from '../../src/modules/events/events.repository.js';
 import { createEventsRouter } from '../../src/modules/events/events.routes.js';
 import { EventsService } from '../../src/modules/events/events.service.js';
+import type { EventSearchProjection } from '../../src/modules/events/events.types.js';
 import { MembershipsController } from '../../src/modules/memberships/memberships.controller.js';
 import { MembershipsRepository } from '../../src/modules/memberships/memberships.repository.js';
 import { createMembershipsRouter } from '../../src/modules/memberships/memberships.routes.js';
@@ -41,6 +42,9 @@ import { IdentityRepository } from '../../src/modules/identity/identity.reposito
 import { createIdentityRouter } from '../../src/modules/identity/identity.routes.js';
 import { IdentityService } from '../../src/modules/identity/identity.service.js';
 import type { IdentityRateLimiters } from '../../src/modules/identity/identity.types.js';
+import { SearchController } from '../../src/modules/search/search.controller.js';
+import { createSearchRouter } from '../../src/modules/search/search.routes.js';
+import type { SearchService } from '../../src/modules/search/search.service.js';
 import { createRequireAuthenticatedUser } from '../../src/shared/auth/authentication.middleware.js';
 import { createLocalRateLimit } from '../../src/shared/rate-limit/rate-limit.middleware.js';
 
@@ -52,9 +56,11 @@ interface TestDatabase {
 interface TestAppDependencies {
   chatTicketStore?: WebSocketTicketStore;
   eventCache?: EventCache;
+  eventSearchProjection?: EventSearchProjection;
   identityRateLimiters?: IdentityRateLimiters;
   realtimeService?: RealtimeService;
   realtimeWakeupPublisher?: RealtimeWakeupPublisher;
+  searchService?: SearchService;
 }
 
 const testAccessTokens = new JwtAccessTokens({
@@ -96,7 +102,13 @@ export const createTestApp = (
     requireAuthenticatedUser,
   );
   const eventsRouter = createEventsRouter(
-    new EventsController(new EventsService(new EventsRepository(prisma), dependencies.eventCache)),
+    new EventsController(
+      new EventsService(
+        new EventsRepository(prisma),
+        dependencies.eventCache,
+        dependencies.eventSearchProjection,
+      ),
+    ),
     requireAuthenticatedUser,
   );
   const reservationsRouter = createReservationsRouter(
@@ -125,6 +137,10 @@ export const createTestApp = (
           ),
           requireAuthenticatedUser,
         );
+  const searchRouter =
+    dependencies.searchService === undefined
+      ? undefined
+      : createSearchRouter(new SearchController(dependencies.searchService));
 
   return createApp({
     corsOrigin: 'http://localhost:5173',
@@ -139,5 +155,6 @@ export const createTestApp = (
     identityRouter,
     ...(realtimeRouter === undefined ? {} : { realtimeRouter }),
     ...(chatRouter === undefined ? {} : { chatRouter }),
+    ...(searchRouter === undefined ? {} : { searchRouter }),
   });
 };
