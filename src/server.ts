@@ -50,6 +50,15 @@ import { RealtimeController } from './modules/realtime/realtime.controller.js';
 import { RealtimeRepository } from './modules/realtime/realtime.repository.js';
 import { createRealtimeRouter } from './modules/realtime/realtime.routes.js';
 import { RealtimeService } from './modules/realtime/realtime.service.js';
+import { ChatWebSocketGateway } from './infrastructure/http/chat-websocket-gateway.js';
+import { ChatWebSocketServer } from './infrastructure/http/chat-websocket-server.js';
+import { RedisChatBus, createChatSubscriber } from './infrastructure/redis/chat-bus.js';
+import { RedisChatPresence } from './infrastructure/redis/chat-presence.js';
+import { WebSocketTicketStore } from './infrastructure/redis/websocket-ticket-store.js';
+import { ChatController } from './modules/chat/chat.controller.js';
+import { ChatRepository } from './modules/chat/chat.repository.js';
+import { createChatRouter } from './modules/chat/chat.routes.js';
+import { ChatService } from './modules/chat/chat.service.js';
 
 const pinoConfig = {
   redact: {
@@ -107,6 +116,28 @@ const identityRouter = createIdentityRouter(
   requireAuthenticatedUser,
   identityRateLimiters,
 );
+
+const chatRepository = new ChatRepository(pool);
+const chatService = new ChatService(chatRepository);
+const webSocketTickets = new WebSocketTicketStore(redis, logger, environment.WS_TICKET_TTL_SECONDS);
+const chatRouter = createChatRouter(
+  new ChatController(chatService, webSocketTickets),
+  requireAuthenticatedUser,
+);
+
+const chatSubscriber = createChatSubscriber(redis, logger);
+const chatBus = new RedisChatBus(redis, chatSubscriber, logger);
+const chatPresence = new RedisChatPresence(redis, logger, environment.WS_PRESENCE_LEASE_MS);
+const chatGateway = new ChatWebSocketGateway(chatService, chatBus, chatPresence, logger, {
+  heartbeatIntervalMs: environment.WS_HEARTBEAT_INTERVAL_MS,
+  maxConnectionDurationMs: environment.WS_MAX_CONNECTION_DURATION_MS,
+  maxBufferedBytes: environment.WS_MAX_BUFFERED_BYTES,
+  commandLimit: environment.WS_COMMAND_LIMIT,
+  commandWindowMs: environment.WS_COMMAND_WINDOW_MS,
+  typingTtlMs: environment.WS_TYPING_TTL_MS,
+});
+
+chatBus.start(chatGateway);
 
 const realtimeRepository = new RealtimeRepository(pool);
 const realtimeService = new RealtimeService(realtimeRepository, logger, {
@@ -181,9 +212,24 @@ const app = createApp({
   reservationsRouter,
   identityRouter,
   realtimeRouter,
+  chatRouter,
 });
 
 const server = createServer(app);
+
+const chatWebSocketServer = new ChatWebSocketServer(
+  server,
+  webSocketTickets,
+  chatService,
+  chatGateway,
+  logger,
+  {
+    allowedOrigin: environment.CORS_ORIGIN,
+    maxPayloadBytes: environment.WS_MAX_PAYLOAD_BYTES,
+  },
+);
+
+chatWebSocketServer.start();
 
 server.listen(environment.PORT, () => {
   logger.info({ port: environment.PORT }, 'Gatherly HTTP server started');
@@ -194,11 +240,13 @@ const gracefulShutdown = createGracefulShutdown({
   state: shutdownState,
   logger,
   timeoutMs: 10_000,
-  closeLongLivedConnections: () => {
+  closeLongLivedConnections: async () => {
     realtimeService.shutdown();
+    await chatWebSocketServer.shutdown();
   },
   closeDependencies: async () => {
     await Promise.all([
+      chatBus.close(),
       realtimeBus.close(),
       closeRedisClient(redis),
       prisma.$disconnect(),

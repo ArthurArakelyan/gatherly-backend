@@ -20,6 +20,7 @@ export interface AppDependencies {
   reservationsRouter: Router;
   identityRouter: Router;
   realtimeRouter?: Router;
+  chatRouter?: Router;
 }
 
 export const createApp = (dependencies: AppDependencies): Express => {
@@ -55,6 +56,10 @@ export const createApp = (dependencies: AppDependencies): Express => {
 
   if (dependencies.realtimeRouter !== undefined) {
     app.use('/api', dependencies.realtimeRouter);
+  }
+
+  if (dependencies.chatRouter !== undefined) {
+    app.use('/api', dependencies.chatRouter);
   }
 
   app.use(notFoundHandler);

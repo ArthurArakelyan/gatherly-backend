@@ -208,7 +208,9 @@ username/password identity endpoints, communities, memberships, public events,
 reservations, and waitlists. Protected endpoints require a JWT in the
 `Authorization: Bearer <token>` header. The full implemented contract is in
 [`docs/openapi.yaml`](./docs/openapi.yaml), assembled from module-specific files
-under [`docs/openapi/`](./docs/openapi/).
+under [`docs/openapi/`](./docs/openapi/). The WebSocket upgrade, commands,
+events, and close codes are documented separately in
+[`docs/websocket-protocol.md`](./docs/websocket-protocol.md).
 
 ### Available scripts
 
@@ -716,6 +718,15 @@ PostgreSQL replay, authenticated notification and organizer-counter streams,
 Redis Pub/Sub wake-ups, reconnection, heartbeat, authorization rechecks, and
 graceful cleanup. Automated test implementation is isolated in a final AI
 handoff checkpoint so the transport remains a user-led learning exercise.
+
+Then follow the build-it-yourself WebSocket and persisted event-chat guide in
+[`PHASE_6_WEBSOCKETS_HANDBOOK.md`](./PHASE_6_WEBSOCKETS_HANDBOOK.md). It adds
+one-use handshake tickets, PostgreSQL-backed message history and moderation,
+idempotent sends, current authorization checks, Redis Pub/Sub fan-out, typing,
+leased presence, ping/pong liveness, backpressure limits, reconnect recovery,
+and graceful upgraded-socket cleanup. Its automated tests are likewise kept in
+a final AI handoff checkpoint after the learner implements and manually
+inspects the protocol.
 
 Do not add Kubernetes or split the modular monolith into microservices for this project.
 

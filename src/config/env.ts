@@ -31,6 +31,20 @@ const environmentSchema = z.object({
     .min(60_000)
     .max(86_400_000)
     .default(600_000),
+  WS_TICKET_TTL_SECONDS: z.coerce.number().int().min(5).max(120).default(30),
+  WS_MAX_PAYLOAD_BYTES: z.coerce.number().int().min(1_024).max(65_536).default(16_384),
+  WS_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(5_000).max(60_000).default(30_000),
+  WS_PRESENCE_LEASE_MS: z.coerce.number().int().min(15_000).max(300_000).default(90_000),
+  WS_MAX_CONNECTION_DURATION_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(86_400_000)
+    .default(600_000),
+  WS_MAX_BUFFERED_BYTES: z.coerce.number().int().min(16_384).max(4_194_304).default(262_144),
+  WS_COMMAND_LIMIT: z.coerce.number().int().min(1).max(1_000).default(30),
+  WS_COMMAND_WINDOW_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+  WS_TYPING_TTL_MS: z.coerce.number().int().min(1_000).max(15_000).default(5_000),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;

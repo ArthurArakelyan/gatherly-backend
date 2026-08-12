@@ -3,7 +3,7 @@ info:
   title: Gatherly API
   version: 0.1.0
   description: |
-    The implemented API through the Phase 6 SSE increment. PostgreSQL is the
+    The implemented API through the Phase 6 WebSocket chat increment. PostgreSQL is the
     durable source of truth; Redis accelerates disposable cache, throttling,
     and cross-instance realtime wake-ups.
 
@@ -27,6 +27,8 @@ tags:
     description: Authenticated, capacity-safe reservations, waitlists, cancellation, and idempotency.
   - name: Realtime
     description: Authenticated one-way notification and organizer updates over SSE.
+  - name: Chat
+    description: WebSocket handshake tickets and durable event-chat history.
 paths:
   /health/live:
     get:
@@ -416,6 +418,68 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+  /api/chat/websocket-tickets:
+    post:
+      tags: [Chat]
+      summary: Issue a one-use WebSocket handshake ticket
+      description: |
+        Exchanges the caller's bearer-authenticated HTTP session for a random,
+        short-lived, one-use ticket. Send the ticket as the
+        `gatherly.ticket.<ticket>` WebSocket subprotocol together with
+        `gatherly.chat.v1`; never put it in the socket URL. Redis stores only a
+        SHA-256 digest and consumes it atomically. The full frame contract is
+        documented in `docs/websocket-protocol.md`.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '201':
+          description: Ticket created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebSocketTicketResponse' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '503':
+          description: Redis cannot safely issue a ticket (`CHAT_HANDSHAKE_UNAVAILABLE`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /api/events/{eventId}/chat/messages:
+    get:
+      tags: [Chat]
+      summary: Read durable event-chat history
+      description: |
+        Requires a current active account and active membership in the event's
+        active community. Results are newest first by `(createdAt, id)`.
+        Deleted messages are tombstones: `body` is null and `deletedAt` is set.
+        Use REST history after reconnect; WebSocket frames are not replayed.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor returned by the preceding page.
+          schema: { type: string, minLength: 1, maxLength: 300, pattern: '^[A-Za-z0-9_-]+$' }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Authorized durable chat history.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatHistoryResponse' }
+        '400':
+          description: Invalid event ID, limit, or opaque cursor (`VALIDATION_ERROR` or `INVALID_CHAT_CURSOR`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/AuthenticationRequired' }
+        '403':
+          description: Current event-chat access is denied (`CHAT_ACCESS_DENIED`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 components:
   securitySchemes:
     bearerAuth:
@@ -691,6 +755,54 @@ components:
         status: { type: string, enum: [WAITING] }
         joinedAt: { type: string, format: date-time }
         position: { type: integer, minimum: 1 }
+    WebSocketTicketResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [ticket, expiresIn]
+          properties:
+            ticket:
+              type: string
+              pattern: '^[A-Za-z0-9_-]{43}$'
+              description: Opaque one-use secret. Never log or place it in a URL.
+            expiresIn: { type: integer, minimum: 1, description: Lifetime in seconds. }
+    ChatMessage:
+      type: object
+      required: [id, eventId, sender, body, deletedAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        sender:
+          type: object
+          required: [id, username]
+          properties:
+            id: { type: string, format: uuid }
+            username: { type: string }
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          nullable: true
+          description: Null only for a deleted-message tombstone.
+        deletedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    ChatHistoryResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ChatMessage' }
+        pagination:
+          type: object
+          required: [nextCursor]
+          properties:
+            nextCursor:
+              type: string
+              nullable: true
+              description: Opaque cursor for the next older page, or null at the end.
   responses:
     Error:
       description: Safe machine-readable error response.

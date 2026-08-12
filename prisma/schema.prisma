@@ -9,24 +9,70 @@ datasource db {
 }
 
 model User {
-  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  username        String                @unique(map: "users_username_key")
-  passwordHash    String                @map("password_hash")
-  status          String                @default("ACTIVE")
-  platformRole    String                @default("USER") @map("platform_role")
-  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
-  lastLoginAt     DateTime?             @map("last_login_at") @db.Timestamptz(6)
-  communitiesMade Community[]           @relation("CommunityCreator")
-  eventsMade      Event[]               @relation("EventCreator")
-  memberships     CommunityMembership[]
-  reservations    Reservation[]
-  waitlistEntries WaitlistEntry[]
-  notifications   Notification[]
-  idempotencyKeys IdempotencyKey[]
-  realtimeEvents RealtimeEvent[] @relation("RealtimeUserAudience")
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username              String                 @unique(map: "users_username_key")
+  passwordHash          String                 @map("password_hash")
+  status                String                 @default("ACTIVE")
+  platformRole          String                 @default("USER") @map("platform_role")
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime               @default(now()) @map("updated_at") @db.Timestamptz(6)
+  lastLoginAt           DateTime?              @map("last_login_at") @db.Timestamptz(6)
+  communitiesMade       Community[]            @relation("CommunityCreator")
+  eventsMade            Event[]                @relation("EventCreator")
+  memberships           CommunityMembership[]
+  reservations          Reservation[]
+  waitlistEntries       WaitlistEntry[]
+  notifications         Notification[]
+  idempotencyKeys       IdempotencyKey[]
+  realtimeEvents        RealtimeEvent[]        @relation("RealtimeUserAudience")
+  sentChatMessages      ChatMessage[]          @relation("ChatMessageSender")
+  deletedChatMessages   ChatMessage[]          @relation("ChatMessageDeletedBy")
+  chatModerationActions ChatModerationAction[] @relation("ChatModerationActor")
 
   @@map("users")
+}
+
+model EventConversation {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId   String        @unique(map: "event_conversations_event_id_key") @map("event_id") @db.Uuid
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  event     Event         @relation(fields: [eventId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  messages  ChatMessage[]
+
+  @@map("event_conversations")
+}
+
+model ChatMessage {
+  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId    String                 @map("conversation_id") @db.Uuid
+  senderUserId      String                 @map("sender_user_id") @db.Uuid
+  clientMessageId   String                 @map("client_message_id") @db.Uuid
+  body              String
+  deletedAt         DateTime?              @map("deleted_at") @db.Timestamptz(6)
+  deletedByUserId   String?                @map("deleted_by_user_id") @db.Uuid
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  conversation      EventConversation      @relation(fields: [conversationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sender            User                   @relation("ChatMessageSender", fields: [senderUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  deletedBy         User?                  @relation("ChatMessageDeletedBy", fields: [deletedByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  moderationActions ChatModerationAction[]
+
+  @@unique([conversationId, senderUserId, clientMessageId], map: "chat_messages_client_id_key")
+  @@index([conversationId, createdAt(sort: Desc), id(sort: Desc)], map: "chat_messages_history_idx")
+  @@map("chat_messages")
+}
+
+model ChatModerationAction {
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId   String      @map("message_id") @db.Uuid
+  actorUserId String      @map("actor_user_id") @db.Uuid
+  action      String
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  message     ChatMessage @relation(fields: [messageId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  actor       User        @relation("ChatModerationActor", fields: [actorUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([messageId, createdAt], map: "chat_moderation_actions_message_idx")
+  @@map("chat_moderation_actions")
 }
 
 model Community {
@@ -45,7 +91,7 @@ model Community {
   creator         User                  @relation("CommunityCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   memberships     CommunityMembership[]
   events          Event[]
-  realtimeEvents RealtimeEvent[] @relation("RealtimeCommunityAudience")
+  realtimeEvents  RealtimeEvent[]       @relation("RealtimeCommunityAudience")
 
   @@index([status, createdAt(sort: Desc), id(sort: Desc)], map: "communities_status_created_idx")
   @@map("communities")
@@ -84,25 +130,26 @@ model CommunityMembership {
 }
 
 model Event {
-  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  communityId     String          @map("community_id") @db.Uuid
-  createdByUserId String          @map("created_by_user_id") @db.Uuid
-  title           String
-  slug            String
-  description     String          @default("")
-  format          String          @default("IN_PERSON")
-  status          String          @default("PUBLISHED")
-  visibility      String          @default("PUBLIC")
-  startsAt        DateTime        @map("starts_at") @db.Timestamptz(6)
-  endsAt          DateTime        @map("ends_at") @db.Timestamptz(6)
-  timezone        String
-  capacity        Int
-  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
-  community       Community       @relation(fields: [communityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  creator         User            @relation("EventCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  reservations    Reservation[]
-  waitlistEntries WaitlistEntry[]
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  communityId      String             @map("community_id") @db.Uuid
+  createdByUserId  String             @map("created_by_user_id") @db.Uuid
+  title            String
+  slug             String
+  description      String             @default("")
+  format           String             @default("IN_PERSON")
+  status           String             @default("PUBLISHED")
+  visibility       String             @default("PUBLIC")
+  startsAt         DateTime           @map("starts_at") @db.Timestamptz(6)
+  endsAt           DateTime           @map("ends_at") @db.Timestamptz(6)
+  timezone         String
+  capacity         Int
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  community        Community          @relation(fields: [communityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator          User               @relation("EventCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reservations     Reservation[]
+  waitlistEntries  WaitlistEntry[]
+  chatConversation EventConversation?
 
   @@unique([communityId, slug], map: "events_community_slug_key")
   @@index([status, startsAt, id], map: "events_status_starts_idx")

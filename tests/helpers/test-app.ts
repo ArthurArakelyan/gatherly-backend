@@ -25,6 +25,11 @@ import { RealtimeController } from '../../src/modules/realtime/realtime.controll
 import { createRealtimeRouter } from '../../src/modules/realtime/realtime.routes.js';
 import type { RealtimeService } from '../../src/modules/realtime/realtime.service.js';
 import type { RealtimeWakeupPublisher } from '../../src/modules/realtime/realtime.types.js';
+import { ChatController } from '../../src/modules/chat/chat.controller.js';
+import { ChatRepository } from '../../src/modules/chat/chat.repository.js';
+import { createChatRouter } from '../../src/modules/chat/chat.routes.js';
+import { ChatService } from '../../src/modules/chat/chat.service.js';
+import type { WebSocketTicketStore } from '../../src/infrastructure/redis/websocket-ticket-store.js';
 import { Argon2PasswordHasher } from '../../src/infrastructure/security/argon2-password-hasher.js';
 import { JwtAccessTokens } from '../../src/infrastructure/security/jwt-access-tokens.js';
 import { IdentityController } from '../../src/modules/identity/identity.controller.js';
@@ -45,6 +50,7 @@ interface TestDatabase {
 }
 
 interface TestAppDependencies {
+  chatTicketStore?: WebSocketTicketStore;
   eventCache?: EventCache;
   identityRateLimiters?: IdentityRateLimiters;
   realtimeService?: RealtimeService;
@@ -109,6 +115,16 @@ export const createTestApp = (
           new RealtimeController(dependencies.realtimeService),
           requireAuthenticatedUser,
         );
+  const chatRouter =
+    dependencies.chatTicketStore === undefined
+      ? undefined
+      : createChatRouter(
+          new ChatController(
+            new ChatService(new ChatRepository(pool)),
+            dependencies.chatTicketStore,
+          ),
+          requireAuthenticatedUser,
+        );
 
   return createApp({
     corsOrigin: 'http://localhost:5173',
@@ -122,5 +138,6 @@ export const createTestApp = (
     reservationsRouter,
     identityRouter,
     ...(realtimeRouter === undefined ? {} : { realtimeRouter }),
+    ...(chatRouter === undefined ? {} : { chatRouter }),
   });
 };

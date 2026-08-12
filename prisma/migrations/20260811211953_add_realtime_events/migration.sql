@@ -1,15 +1,15 @@
 CREATE TABLE "realtime_events" (
-  "id" BIGSERIAL NOT NULL,
-  "type" TEXT NOT NULL,
-  "audience_user_id" UUID,
-  "community_id" UUID,
-  "payload" JSONB NOT NULL,
-  "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                 "id" BIGSERIAL NOT NULL,
+                                 "type" TEXT NOT NULL,
+                                 "audience_user_id" UUID,
+                                 "community_id" UUID,
+                                 "payload" JSONB NOT NULL,
+                                 "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-  CONSTRAINT "realtime_events_pkey" PRIMARY KEY ("id"),
-  CONSTRAINT "realtime_events_one_audience_check" CHECK (
-    (("audience_user_id" IS NOT NULL)::integer
-      + ("community_id" IS NOT NULL)::integer) = 1
+                                 CONSTRAINT "realtime_events_pkey" PRIMARY KEY ("id"),
+                                 CONSTRAINT "realtime_events_one_audience_check" CHECK (
+                                   (("audience_user_id" IS NOT NULL)::integer
+                                   + ("community_id" IS NOT NULL)::integer) = 1
   ),
   CONSTRAINT "realtime_events_type_check" CHECK (
     "type" IN ('notification.created', 'event.attendance.updated')

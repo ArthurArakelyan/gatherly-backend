@@ -1,0 +1,39 @@
+websocket-tickets:
+  post:
+    tags: [Chat]
+    summary: Issue a one-use WebSocket handshake ticket
+    description: |
+      Requires bearer authentication. Returns a random Redis-backed ticket for
+      the `gatherly.ticket.<ticket>` subprotocol. See `docs/websocket-protocol.md`.
+    security: [{ bearerAuth: [] }]
+    responses:
+      '201':
+        description: Ticket created.
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/WebSocketTicketResponse' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
+      '503': { $ref: '../../openapi.yaml#/components/responses/Error' }
+
+events/{eventId}/chat/messages:
+  get:
+    tags: [Chat]
+    summary: Read durable event-chat history
+    security: [{ bearerAuth: [] }]
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/EventId'
+      - name: cursor
+        in: query
+        schema: { type: string, minLength: 1, maxLength: 300, pattern: '^[A-Za-z0-9_-]+$' }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    responses:
+      '200':
+        description: Newest-first durable chat history with tombstones.
+        content:
+          application/json:
+            schema: { $ref: '../../openapi.yaml#/components/schemas/ChatHistoryResponse' }
+      '400': { $ref: '../../openapi.yaml#/components/responses/Error' }
+      '401': { $ref: '../../openapi.yaml#/components/responses/AuthenticationRequired' }
+      '403': { $ref: '../../openapi.yaml#/components/responses/Error' }
