@@ -2,11 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { EventsRepository } from '../../src/modules/events/events.repository.js';
 import { EventsService } from '../../src/modules/events/events.service.js';
-import type {
-  CreateEventInput,
-  Event,
-  EventSearchProjection,
-} from '../../src/modules/events/events.types.js';
+import type { CreateEventInput, Event } from '../../src/modules/events/events.types.js';
 import { createEventCacheMock } from '../helpers/event-cache.js';
 
 const input: CreateEventInput = {
@@ -32,8 +28,7 @@ const event: Event = {
 };
 
 describe('EventsService', () => {
-  it('schedules search projection only after an authorized event commits', async () => {
-    const schedule = vi.fn();
+  it('persists and returns an authorized event', async () => {
     const create = vi.fn().mockResolvedValue(event);
     const repository = {
       create,
@@ -45,18 +40,11 @@ describe('EventsService', () => {
       findPublicById: vi.fn(),
       listPublic: vi.fn(),
     } as unknown as EventsRepository;
-    const projection = { schedule } satisfies EventSearchProjection;
-
     await expect(
-      new EventsService(repository, undefined, projection).create(
-        event.communityId,
-        event.createdByUserId,
-        input,
-      ),
+      new EventsService(repository).create(event.communityId, event.createdByUserId, input),
     ).resolves.toEqual(event);
 
     expect(create).toHaveBeenCalledOnce();
-    expect(schedule).toHaveBeenCalledWith(event.id);
   });
 
   it('rejects an unauthorized event creator before persistence', async () => {

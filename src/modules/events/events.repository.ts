@@ -1,6 +1,10 @@
 import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
 
 import { AppError } from '../../shared/errors/app-error.js';
+import {
+  createEventChangedEnvelope,
+  DOMAIN_EVENTS_TOPIC,
+} from '../../shared/events/domain-event.js';
 import type {
   CreateEventInput,
   Event,
@@ -71,23 +75,39 @@ export class EventsRepository {
     input: CreateEventInput,
   ): Promise<Event> {
     try {
-      const record = await this.prisma.event.create({
-        data: {
-          communityId,
-          createdByUserId: userId,
-          title: input.title,
-          slug: input.slug,
-          description: input.description,
-          format: input.format,
-          visibility: input.visibility,
-          startsAt: input.startsAt,
-          endsAt: input.endsAt,
-          timezone: input.timezone,
-          capacity: input.capacity,
-        },
-        select: eventSelection,
+      return await this.prisma.$transaction(async (transaction) => {
+        const record = await transaction.event.create({
+          data: {
+            communityId,
+            createdByUserId: userId,
+            title: input.title,
+            slug: input.slug,
+            description: input.description,
+            format: input.format,
+            visibility: input.visibility,
+            startsAt: input.startsAt,
+            endsAt: input.endsAt,
+            timezone: input.timezone,
+            capacity: input.capacity,
+          },
+          select: eventSelection,
+        });
+
+        const envelope = createEventChangedEnvelope(record.id, record.updatedAt);
+        await transaction.outboxEvent.create({
+          data: {
+            id: envelope.id,
+            topic: DOMAIN_EVENTS_TOPIC,
+            eventKey: record.id,
+            eventType: envelope.type,
+            eventVersion: envelope.version,
+            payload: envelope,
+            occurredAt: new Date(envelope.occurredAt),
+          },
+        });
+
+        return mapEvent(record);
       });
-      return mapEvent(record);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new AppError(409, 'EVENT_SLUG_TAKEN', 'That event slug is already used here');

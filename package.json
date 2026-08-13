@@ -35,7 +35,11 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:migrate:status": "prisma migrate status",
     "search:reindex": "tsx src/workers/search-reindex.ts",
-    "search:reindex:prod": "node dist/workers/search-reindex.js"
+    "search:reindex:prod": "node dist/workers/search-reindex.js",
+    "kafka:outbox": "tsx src/workers/outbox-publisher.ts",
+    "kafka:outbox:prod": "node dist/workers/outbox-publisher.js",
+    "kafka:search-consumer": "tsx src/workers/search-projection-consumer.ts",
+    "kafka:search-consumer:prod": "node dist/workers/search-projection-consumer.js"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.4.3",

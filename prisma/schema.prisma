@@ -220,3 +220,31 @@ model IdempotencyKey {
   @@unique([userId, scope, key], map: "idempotency_keys_user_scope_key_key")
   @@map("idempotency_keys")
 }
+
+model OutboxEvent {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  topic           String
+  eventKey        String    @map("event_key")
+  eventType       String    @map("event_type")
+  eventVersion    Int       @map("event_version")
+  payload         Json      @db.JsonB
+  occurredAt      DateTime  @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  publishedAt     DateTime? @map("published_at") @db.Timestamptz(6)
+  publishAttempts Int       @default(0) @map("publish_attempts")
+  lastError       String?   @map("last_error")
+
+  @@map("outbox_events")
+}
+
+model ProcessedKafkaEvent {
+  consumerName String   @map("consumer_name")
+  eventId      String   @map("event_id") @db.Uuid
+  topic        String
+  partition    Int
+  offsetValue  BigInt   @map("offset_value")
+  processedAt  DateTime @default(now()) @map("processed_at") @db.Timestamptz(6)
+
+  @@id([consumerName, eventId])
+  @@index([processedAt], map: "processed_kafka_events_processed_at_idx")
+  @@map("processed_kafka_events")
+}

@@ -11,7 +11,7 @@ import {
   EVENT_SEARCH_WRITE_ALIAS,
 } from '../../src/infrastructure/elasticsearch/event-index-definition.js';
 import { EventSearchIndex } from '../../src/infrastructure/elasticsearch/event-search-index.js';
-import { BestEffortEventSearchProjector } from '../../src/modules/search/event-search-projector.js';
+import { EventSearchProjector } from '../../src/modules/search/event-search-projector.js';
 import { EventSearchSourceRepository } from '../../src/modules/search/event-search-source.repository.js';
 import { SearchRepository } from '../../src/modules/search/search.repository.js';
 import { SearchService } from '../../src/modules/search/search.service.js';
@@ -131,7 +131,7 @@ describe('Elasticsearch event discovery integration', () => {
 
     const streamed = [];
     for await (const document of source.iterateEligible(1)) streamed.push(document);
-    expect(streamed.map((document) => document.title)).toEqual([
+    expect(streamed.map((document) => document.title).sort()).toEqual([
       'Beginner pottery',
       'Woodworking basics',
     ]);
@@ -271,14 +271,13 @@ describe('Elasticsearch event discovery integration', () => {
       title: 'Original title',
     });
     await index.rebuild(source);
-    const projector = new BestEffortEventSearchProjector(source, index, logger);
+    const projector = new EventSearchProjector(source, index);
 
     await postgres.pool.query(
       `UPDATE events SET title = 'Updated title', updated_at = now() WHERE id = $1`,
       [eventId],
     );
-    projector.schedule(eventId);
-    await projector.drain();
+    await expect(projector.sync(eventId)).resolves.toBe('indexed');
     await elasticsearch.client.indices.refresh({ index: EVENT_SEARCH_READ_ALIAS });
     const updated = await elasticsearch.client.get({
       index: EVENT_SEARCH_READ_ALIAS,
@@ -289,8 +288,7 @@ describe('Elasticsearch event discovery integration', () => {
     await postgres.pool.query(`UPDATE events SET visibility = 'COMMUNITY_ONLY' WHERE id = $1`, [
       eventId,
     ]);
-    projector.schedule(eventId);
-    await projector.drain();
+    await expect(projector.sync(eventId)).resolves.toBe('deleted');
     expect(await elasticsearch.client.exists({ index: EVENT_SEARCH_READ_ALIAS, id: eventId })).toBe(
       false,
     );

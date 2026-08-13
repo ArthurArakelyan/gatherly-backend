@@ -13,7 +13,6 @@ import type { EventCache } from '../../src/modules/events/events.cache.js';
 import { EventsRepository } from '../../src/modules/events/events.repository.js';
 import { createEventsRouter } from '../../src/modules/events/events.routes.js';
 import { EventsService } from '../../src/modules/events/events.service.js';
-import type { EventSearchProjection } from '../../src/modules/events/events.types.js';
 import { MembershipsController } from '../../src/modules/memberships/memberships.controller.js';
 import { MembershipsRepository } from '../../src/modules/memberships/memberships.repository.js';
 import { createMembershipsRouter } from '../../src/modules/memberships/memberships.routes.js';
@@ -56,7 +55,6 @@ interface TestDatabase {
 interface TestAppDependencies {
   chatTicketStore?: WebSocketTicketStore;
   eventCache?: EventCache;
-  eventSearchProjection?: EventSearchProjection;
   identityRateLimiters?: IdentityRateLimiters;
   realtimeService?: RealtimeService;
   realtimeWakeupPublisher?: RealtimeWakeupPublisher;
@@ -102,13 +100,7 @@ export const createTestApp = (
     requireAuthenticatedUser,
   );
   const eventsRouter = createEventsRouter(
-    new EventsController(
-      new EventsService(
-        new EventsRepository(prisma),
-        dependencies.eventCache,
-        dependencies.eventSearchProjection,
-      ),
-    ),
+    new EventsController(new EventsService(new EventsRepository(prisma), dependencies.eventCache)),
     requireAuthenticatedUser,
   );
   const reservationsRouter = createReservationsRouter(

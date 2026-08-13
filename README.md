@@ -263,6 +263,9 @@ yarn test:e2e          Run tests/e2e
 yarn db:migrate        Apply pending migrations from TypeScript
 yarn db:migrate:prod   Apply pending migrations from compiled JavaScript
 yarn db:seed           Insert repeatable development data
+yarn search:reindex    Rebuild the Elasticsearch event index
+yarn kafka:outbox      Run the Kafka outbox publisher worker
+yarn kafka:search-consumer  Run the Kafka search-projection consumer
 ```
 
 Integration and API tests start an isolated PostgreSQL Testcontainers database,
@@ -282,8 +285,8 @@ Docker must be running for `yarn test`, `yarn test:api`, and
 - Code quality: ESLint flat config, TypeScript-ESLint, Prettier, and ESLint’s Prettier compatibility config.
 
 Infrastructure clients are activated only when their roadmap increment is
-implemented. PostgreSQL, Prisma, Redis, WebSockets, and Elasticsearch are now
-configured; Kafka and OpenTelemetry remain deferred:
+implemented. PostgreSQL, Prisma, Redis, WebSockets, Elasticsearch, and Kafka
+are now configured; OpenTelemetry remains deferred:
 
 ```text
 Raw PostgreSQL phase  pg
@@ -292,7 +295,7 @@ Integration tests     Testcontainers service modules
 Redis phase           redis
 WebSocket phase       ws
 Elasticsearch phase   @elastic/elasticsearch (active)
-Kafka phase           kafkajs (deferred)
+Kafka phase           kafkajs (active)
 OpenTelemetry phase   Node SDK, auto-instrumentation, Pino instrumentation, OTLP exporters (deferred)
 ```
 
@@ -722,7 +725,7 @@ The former Phase 5 asked for a complete frontend, a deployment to a small real g
 
 Improve the Phase 1 containers with production-oriented multi-stage builds, tighter non-root execution, secret handling, image caching, graceful draining, and safe migration handling.
 
-Use unit, integration, API, end-to-end, and process-level tests. Test concurrency, repeated idempotency keys, mid-transaction failure, authentication revocation, object-level authorization, PostgreSQL outages, and shutdown during active requests. Duplicate-message and live-connection tests remain deferred until those technologies exist.
+Use unit, integration, API, end-to-end, and process-level tests. Test concurrency, repeated idempotency keys, mid-transaction failure, authentication revocation, object-level authorization, PostgreSQL outages, shutdown during active requests, duplicate Kafka delivery, and live-connection behavior.
 
 Follow the planning and implementation guide in
 [`PHASE_5_CONTAINER_HARDENING_TESTING_HANDBOOK.md`](./PHASE_5_CONTAINER_HARDENING_TESTING_HANDBOOK.md).
@@ -768,7 +771,16 @@ adds a strict rebuildable public-event projection, versioned indices and atomic
 aliases, typo-tolerant search, autocomplete, filters, facets, PIT cursor
 pagination, best-effort post-commit indexing, a full maintenance-window
 reindex command, and explicit search-outage behavior. PostgreSQL remains the
-source of truth, and Kafka stays deferred to its own later increment.
+source of truth; the later Kafka increment replaces the best-effort trigger.
+
+The Kafka, transactional-outbox, and idempotent-consumer implementation follows
+[`PHASE_6_KAFKA_HANDBOOK.md`](./PHASE_6_KAFKA_HANDBOOK.md). It replaces the
+best-effort event-search projection trigger with an atomic PostgreSQL outbox,
+an at-least-once Kafka publisher, and a duplicate-safe Elasticsearch consumer.
+The HTTP server and worker roles remain one modular-monolith codebase;
+PostgreSQL remains authoritative, malformed records have an explicit
+dead-letter path, and the guide proves the publish/mark and consume/commit crash
+windows with real infrastructure.
 
 When observability is introduced later, add explicit search-projection signals:
 attempt, success, and failure counters; last-success time; failure alerts; and a
