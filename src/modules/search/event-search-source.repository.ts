@@ -61,10 +61,14 @@ export class EventSearchSourceRepository {
     return this.prisma.event.count({ where: eligibleWhere });
   }
 
-  public async *iterateEligible(batchSize = 500): AsyncGenerator<EventSearchDocument> {
+  public async *iterateEligible(
+    batchSize = 500,
+    signal?: AbortSignal,
+  ): AsyncGenerator<EventSearchDocument> {
     let cursor: string | undefined;
 
     for (;;) {
+      signal?.throwIfAborted();
       const records = await this.prisma.event.findMany({
         where: eligibleWhere,
         select: projectionSelection,
@@ -72,9 +76,13 @@ export class EventSearchSourceRepository {
         take: batchSize,
         ...(cursor === undefined ? {} : { cursor: { id: cursor }, skip: 1 }),
       });
+      signal?.throwIfAborted();
 
       if (records.length === 0) return;
-      for (const record of records) yield mapProjection(record);
+      for (const record of records) {
+        signal?.throwIfAborted();
+        yield mapProjection(record);
+      }
 
       const [lastRecord] = records.slice(-1);
       if (lastRecord === undefined) return;

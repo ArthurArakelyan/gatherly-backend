@@ -86,4 +86,16 @@ describe('SearchReconciler', () => {
     );
     expect(result).toEqual({ eligible: 0, indexed: 501, missing: 0, stale: 0, ineligible: 501 });
   });
+
+  it('stops before reading Elasticsearch when cancellation is already requested', async () => {
+    const search = vi.fn();
+    const controller = new AbortController();
+    controller.abort(new Error('test cancellation'));
+    const reconciler = new SearchReconciler(sourceRepository([]), {
+      search,
+    } as unknown as Client);
+
+    await expect(reconciler.reconcile(controller.signal)).rejects.toThrow('test cancellation');
+    expect(search).not.toHaveBeenCalled();
+  });
 });

@@ -120,7 +120,7 @@ Respect the progressive roadmap unless the user requests a different phase:
 6. Phase 5: Container hardening and serious behavioral testing.
 7. Phase 6: Query measurement and targeted database indexes, followed by Redis, SSE, WebSockets, Elasticsearch, and Kafka—in that order and only with a concrete use.
 8. Phase 7: Observability, CI/CD, and production hardening.
-9. Phase 8: Introduce `node-cron` and BullMQ through two small, distinct maintenance use cases. Run search-projection reconciliation on a schedule from a dedicated scheduler process, and use BullMQ for operator-triggered full Elasticsearch reindex jobs with bounded retries and observable progress. Both roles come from the same modular-monolith image. Add the packages with Yarn only when this phase begins; no Phase 8 handbook exists yet.
+9. Phase 8: Introduce `node-cron` and BullMQ through two small, distinct maintenance use cases. Run search-projection reconciliation on a schedule from a dedicated scheduler process, and use BullMQ for operator-triggered full Elasticsearch reindex jobs with bounded retries and observable progress. Both roles come from the same modular-monolith image. Add the packages with Yarn only when each increment begins. The node-cron increment is documented in `PHASE_8_NODE_CRON_HANDBOOK.md`; a BullMQ handbook does not exist yet.
 
 The former "first usable MVP and deployment to a small real group" milestone is deliberately skipped. Gatherly remains a pet/learning project, so do not make real-user deployment a prerequisite for continuing the roadmap. This skip does not pull later product modules or advanced infrastructure into Phase 5.
 

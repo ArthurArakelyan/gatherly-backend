@@ -24,3 +24,18 @@ PostgreSQL-backed APIs remain available.
 - Core readiness stayed healthy.
 - Search returns only currently eligible events.
 - Reconciliation drift is zero.
+
+## Scheduler checks
+
+1. Confirm exactly one intended `search-scheduler` container is running.
+2. Inspect `gatherly_search_reconciliation_runs_total` by bounded result.
+3. Inspect the last-completed timestamp and duration histogram.
+4. Look for `execution:missed`, local `execution:overlap`, PostgreSQL
+   `skipped_locked`, timeout, and dependency-failure logs.
+5. Verify PostgreSQL and Elasticsearch connectivity without printing URLs,
+   credentials, API keys, or event documents.
+6. Run `yarn search:reconcile:prod` manually from the same immutable image.
+
+A missed tick is not replayed. Restore the scheduler and allow the next tick,
+or run the same idempotent comparison manually. Do not schedule a full reindex.
+Use the existing confirmed-drift recovery sequence below.

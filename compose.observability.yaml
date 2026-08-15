@@ -26,6 +26,15 @@ services:
       otel-collector:
         condition: service_started
 
+  search-scheduler:
+    environment:
+      OTEL_SDK_DISABLED: 'false'
+      OTEL_SERVICE_NAME: gatherly-search-scheduler
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+    depends_on:
+      otel-collector:
+        condition: service_started
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.135.0
     command: ['--config=/etc/otelcol-contrib/config.yaml']

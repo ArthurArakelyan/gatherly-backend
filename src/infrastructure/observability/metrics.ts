@@ -17,6 +17,9 @@ export interface ApplicationMetrics {
   projectionResults: Counter<'operation' | 'result'>;
   projectionLastSuccess: Gauge;
   reconciliationDrift: Gauge<'kind'>;
+  reconciliationRuns: Counter<'result'>;
+  reconciliationDuration: Histogram<'result'>;
+  reconciliationLastCompleted: Gauge;
 }
 
 export const createApplicationMetrics = (): ApplicationMetrics => {
@@ -109,6 +112,24 @@ export const createApplicationMetrics = (): ApplicationMetrics => {
       name: 'gatherly_search_reconciliation_drift',
       help: 'Search reconciliation drift by kind',
       labelNames: ['kind'],
+      registers,
+    }),
+    reconciliationRuns: new Counter({
+      name: 'gatherly_search_reconciliation_runs_total',
+      help: 'Search reconciliation runs by bounded outcome',
+      labelNames: ['result'],
+      registers,
+    }),
+    reconciliationDuration: new Histogram({
+      name: 'gatherly_search_reconciliation_duration_seconds',
+      help: 'Search reconciliation duration by bounded outcome',
+      labelNames: ['result'],
+      buckets: [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
+      registers,
+    }),
+    reconciliationLastCompleted: new Gauge({
+      name: 'gatherly_search_reconciliation_last_completed_timestamp_seconds',
+      help: 'Unix time of the last completed search reconciliation comparison',
       registers,
     }),
   };

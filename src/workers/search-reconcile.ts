@@ -1,49 +1,54 @@
 import 'dotenv/config';
 
-import { Client as PostgresClient } from 'pg';
+import { randomUUID } from 'node:crypto';
 
-import { parseSearchReindexEnvironment } from '../config/search-reindex-env.js';
+import { parseSearchSchedulerEnvironment } from '../config/search-scheduler-env.js';
 import {
   closeElasticsearchClient,
   createElasticsearchClient,
 } from '../infrastructure/elasticsearch/client.js';
 import { createApplicationMetrics } from '../infrastructure/observability/metrics.js';
-import { withPostgresAdvisoryLock } from '../infrastructure/postgres/advisory-lock.js';
 import { createPrismaClient } from '../infrastructure/prisma/client.js';
-import { EventSearchSourceRepository } from '../modules/search/event-search-source.repository.js';
-import { SearchReconciler } from '../modules/search/search-reconciler.js';
 import { createLogger } from '../shared/logging/logger.js';
+import { createSearchReconciliationJob } from './create-search-reconciliation-job.js';
 
 const logger = createLogger();
-const environment = parseSearchReindexEnvironment(process.env);
+const environment = parseSearchSchedulerEnvironment(process.env);
 const metrics = createApplicationMetrics();
 const prisma = createPrismaClient(environment);
 const elasticsearch = createElasticsearchClient(environment, logger);
-const lockClient = new PostgresClient({ connectionString: environment.DATABASE_URL });
+const composition = createSearchReconciliationJob(
+  environment,
+  prisma,
+  elasticsearch,
+  metrics,
+  logger,
+);
+const controller = new AbortController();
+
+const requestCancellation = (signal: NodeJS.Signals): void => {
+  controller.abort(new Error(`Search reconciliation interrupted by ${signal}`));
+};
+
+process.once('SIGINT', requestCancellation);
+process.once('SIGTERM', requestCancellation);
 
 try {
-  await lockClient.connect();
-  const reconciler = new SearchReconciler(new EventSearchSourceRepository(prisma), elasticsearch);
-  const outcome = await withPostgresAdvisoryLock(lockClient, 'gatherly:search-reconciliation', () =>
-    reconciler.reconcile(),
-  );
+  const outcome = await composition.job.run({
+    trigger: 'manual',
+    runId: randomUUID(),
+    signal: controller.signal,
+  });
 
-  if (!outcome.acquired) {
-    logger.info('Search reconciliation skipped because another run owns the lock');
-  } else {
-    const result = outcome.value;
-    metrics.reconciliationDrift.set({ kind: 'missing' }, result.missing);
-    metrics.reconciliationDrift.set({ kind: 'stale' }, result.stale);
-    metrics.reconciliationDrift.set({ kind: 'ineligible' }, result.ineligible);
-    logger.info(result, 'Search reconciliation completed');
-    if (result.missing + result.stale + result.ineligible > 0) process.exitCode = 2;
-  }
-} catch (error) {
-  logger.error({ err: error }, 'Search reconciliation failed');
+  if (outcome.status === 'completed' && outcome.drifted) process.exitCode = 2;
+  if (outcome.status === 'cancelled') process.exitCode = 1;
+} catch {
   process.exitCode = 1;
 } finally {
+  process.off('SIGINT', requestCancellation);
+  process.off('SIGTERM', requestCancellation);
   await Promise.allSettled([
-    lockClient.end(),
+    composition.lockPool.end(),
     prisma.$disconnect(),
     closeElasticsearchClient(elasticsearch),
   ]);

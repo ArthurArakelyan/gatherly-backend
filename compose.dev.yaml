@@ -18,3 +18,18 @@ services:
       - ./vitest.config.ts:/app/vitest.config.ts:ro
       - ./prisma:/app/prisma:ro
       - ./prisma.config.ts:/app/prisma.config.ts:ro
+
+  search-scheduler:
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+    command: yarn search:scheduler
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+      - ./tsconfig.build.json:/app/tsconfig.build.json:ro
+      - ./vitest.config.ts:/app/vitest.config.ts:ro
+      - ./prisma:/app/prisma:ro
+      - ./prisma.config.ts:/app/prisma.config.ts:ro

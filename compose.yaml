@@ -192,6 +192,42 @@ services:
     pids_limit: 100
     mem_limit: 384m
 
+  search-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    command: yarn search:scheduler:prod
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PRISMA_POOL_MAX: ${PRISMA_POOL_MAX:-5}
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_REQUEST_TIMEOUT_MS: ${ELASTICSEARCH_REQUEST_TIMEOUT_MS:-2000}
+      ELASTICSEARCH_INDEX_PREFIX: ${ELASTICSEARCH_INDEX_PREFIX:-gatherly-events}
+      SEARCH_RECONCILIATION_CRON: '${SEARCH_RECONCILIATION_CRON:-*/15 * * * *}'
+      SEARCH_RECONCILIATION_TIMEOUT_MS: ${SEARCH_RECONCILIATION_TIMEOUT_MS:-120000}
+      SCHEDULER_SHUTDOWN_TIMEOUT_MS: ${SCHEDULER_SHUTDOWN_TIMEOUT_MS:-30000}
+      SCHEDULER_METRICS_PORT: 9466
+      OTEL_SERVICE_NAME: gatherly-search-scheduler
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 35s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    pids_limit: 100
+    mem_limit: 384m
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:9.4.3
     logging:

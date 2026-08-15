@@ -847,6 +847,28 @@ Use this question to learn readiness checks, graceful shutdown, reverse-proxy tr
 
 **Reverse-proxy decision:** use Nginx rather than Apache if Gatherly is eventually deployed. Nginx will sit in front of the Node/Express container to terminate TLS, expose ports 80/443, proxy HTTP/WebSocket/SSE traffic, and later help switch traffic between old and new application containers. It is not needed for local development and should not be installed or configured until the deployment stage.
 
+### 8. Scheduled maintenance and operator background jobs
+
+Introduce two small background-work tools through separate increments. First,
+use `node-cron` in a dedicated scheduler process to invoke the existing
+read-only search-projection reconciliation use case. Validate the expression at
+startup, evaluate it in UTC, bound each run and shutdown, and use a PostgreSQL
+advisory lock so manual runs or accidental scheduler replicas cannot overlap.
+Missed ticks are safe because reconciliation is idempotent and can run later;
+the scheduler never owns durable business truth.
+
+Follow the complete build-it-yourself node-cron guide in
+[`PHASE_8_NODE_CRON_HANDBOOK.md`](./PHASE_8_NODE_CRON_HANDBOOK.md). It includes
+full TypeScript samples, unit and real-PostgreSQL concurrency tests, a dedicated
+process role from the existing image, private metrics, alerts, runbook updates,
+and graceful-shutdown drills.
+
+After that increment is complete, add BullMQ separately for operator-triggered
+full Elasticsearch reindex jobs with bounded retries and observable progress.
+Do not use BullMQ for ordinary search projection changes, reservations,
+waitlist promotion, authentication, notifications, or Kafka-owned domain
+events. A BullMQ handbook has not been written yet.
+
 ## Testing priorities
 
 Prioritize behavior over a coverage percentage:
@@ -910,6 +932,8 @@ Useful later topics include HTTP/TCP/DNS/TLS, CORS/CSRF/XSS defenses, API versio
 16. Structured logs, metrics, traces, dashboards, and alerts
 17. CI/CD, immutable images, staging, and blue/green production deployment
 18. Backups, restore drills, production hardening, and failure/load testing
+19. Scheduled search-projection reconciliation with node-cron
+20. Operator-triggered full Elasticsearch reindex jobs with BullMQ
 ```
 
 The former real-user MVP gate is intentionally skipped. Later infrastructure

@@ -140,3 +140,33 @@ services:
       options:
         max-size: 10m
         max-file: '3'
+
+  search-scheduler:
+    image: ${APP_IMAGE:?APP_IMAGE must be an immutable digest reference}
+    pull_policy: never
+    command: yarn search:scheduler:prod
+    env_file:
+      - .env.production
+    environment:
+      DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-production}
+      APP_REVISION: ${APP_REVISION:?set APP_REVISION}
+      APP_IMAGE_DIGEST: ${APP_IMAGE_DIGEST:?set APP_IMAGE_DIGEST}
+      OTEL_SERVICE_NAME: gatherly-search-scheduler
+      SCHEDULER_METRICS_PORT: 9466
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    restart: unless-stopped
+    stop_grace_period: 35s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 100
+    mem_limit: 384m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
