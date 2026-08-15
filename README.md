@@ -304,6 +304,14 @@ apply the same SQL migrations, and never use the Compose development volume.
 Docker must be running for `yarn test`, `yarn test:api`, and
 `yarn test:integration`.
 
+`yarn test:coverage` runs the full suite and writes browsable HTML to
+`coverage/index.html` plus `coverage/lcov.info` for CI tooling. Coverage is
+measured over maintained TypeScript under `src/`; the generated Prisma client
+and the process composition root in `src/server.ts` are excluded. The command
+fails if coverage falls below 75% statements, 65% branches, 80% functions, or
+75% lines. These thresholds are regression guards, not substitutes for the
+behavioral and concurrency scenarios listed below.
+
 ### Installed package groups
 
 - API and validation: Express 5, Zod, CORS, Helmet, and Express Rate Limit.

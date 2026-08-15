@@ -28,7 +28,7 @@ jobs:
       - run: yarn typecheck
       - run: yarn lint
       - run: yarn format:check
-      - run: yarn test
+      - run: yarn test:coverage
       - run: yarn build
 
   publish:
