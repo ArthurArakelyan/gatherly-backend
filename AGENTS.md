@@ -120,6 +120,7 @@ Respect the progressive roadmap unless the user requests a different phase:
 6. Phase 5: Container hardening and serious behavioral testing.
 7. Phase 6: Query measurement and targeted database indexes, followed by Redis, SSE, WebSockets, Elasticsearch, and Kafka—in that order and only with a concrete use.
 8. Phase 7: Observability, CI/CD, and production hardening.
+9. Phase 8: Introduce `node-cron` and BullMQ through two small, distinct maintenance use cases. Run search-projection reconciliation on a schedule from a dedicated scheduler process, and use BullMQ for operator-triggered full Elasticsearch reindex jobs with bounded retries and observable progress. Both roles come from the same modular-monolith image. Add the packages with Yarn only when this phase begins; no Phase 8 handbook exists yet.
 
 The former "first usable MVP and deployment to a small real group" milestone is deliberately skipped. Gatherly remains a pet/learning project, so do not make real-user deployment a prerequisite for continuing the roadmap. This skip does not pull later product modules or advanced infrastructure into Phase 5.
 
@@ -137,6 +138,8 @@ Do not hide a lesson the current phase is intended to teach. During Phase 1, foc
 - **Kafka:** late-stage asynchronous domain events. Use a transactional outbox and idempotent consumers; expect duplicate delivery.
 - **OpenTelemetry/Pino:** traces, metrics, and structured logs. Morgan is used earlier to learn HTTP middleware.
 - **Docker:** reproducible environments, introduced progressively; ordinary development should not require every optional service.
+- **node-cron:** a late-stage trigger for bounded, repeatable maintenance work. The first job schedules search-projection reconciliation; it does not replace Kafka, the transactional outbox, or PostgreSQL-backed durable state.
+- **BullMQ:** a Redis-backed late-stage queue for retryable operational tasks. Its first use is an operator-triggered full Elasticsearch reindex with status/progress reporting; it does not carry domain events already owned by Kafka/outbox or permanent business work whose loss would corrupt Gatherly.
 
 ## Authentication and security expectations
 
@@ -235,6 +238,24 @@ Favor behavioral confidence over an arbitrary coverage percentage.
   repair runbook, not routine synchronization, until a transactional outbox and
   durable retry worker make projection delivery self-healing. Keep search
   excluded from general readiness while it remains a non-critical projection.
+
+## Scheduled maintenance and background jobs
+
+- Phase 8 introduces `node-cron` with one job only: periodically invoke the existing bounded search-projection reconciliation use case.
+- Run scheduling as a dedicated process role from the same application image, not inside every HTTP replica.
+- Treat the cron expression as configuration, validate it at startup, use UTC explicitly, and log the scheduled start, completion, duration, result, and safe error details.
+- Make the reconciliation idempotent and protect it with a PostgreSQL advisory lock so a delayed run, restart, manual invocation, or accidental second scheduler cannot overlap. A skipped locked run is an observable outcome, not an error requiring parallel execution.
+- Bound each run with cancellation/timeout handling and stop accepting new runs during graceful shutdown; let an in-flight run finish only within the shutdown bound.
+- PostgreSQL remains authoritative. `node-cron` is only a best-effort trigger and must not own durable reminders, delayed domain events, waitlist promotion, or retry delivery. Missed runs must be safe because a later run or manual command can reconcile the same state.
+- Test the cron callback separately from reconciliation business logic, then add an integration test proving two scheduler instances cannot execute the locked job concurrently.
+- Defer additional cron jobs until a concrete maintenance need is measured; do not add generic cleanup, event-status mutation, or user notification schedules speculatively.
+- Phase 8 also introduces one BullMQ queue for operator-triggered full Elasticsearch reindex jobs. Reuse the existing reindex use case instead of placing search logic inside the queue processor.
+- Run the BullMQ worker as another dedicated process role from the same application image. Keep queue names, job names, payload schemas, retry/backoff limits, concurrency, timeouts, and retention explicit and validated.
+- Use a deterministic job identity and a PostgreSQL advisory lock so duplicate requests or worker replicas cannot run two full reindexes concurrently. Report `queued`, `running`, progress, `completed`, `failed`, and `cancelled` states without exposing Elasticsearch credentials or private event documents.
+- Redis and BullMQ remain non-authoritative. Losing Redis may lose a queued maintenance request, but it must not lose business truth; an operator can safely enqueue the reindex again and PostgreSQL supplies the projection source.
+- Do not route ordinary event projection changes through BullMQ: the PostgreSQL transactional outbox and Kafka consumer already own that durable asynchronous path. Do not put reservations, waitlist promotion, authentication, or durable in-app notification creation solely in BullMQ.
+- Keep `node-cron`, BullMQ, and Kafka conceptually separate: cron decides when to trigger repeatable maintenance, BullMQ distributes retryable task execution, and Kafka carries durable domain-event streams from the transactional outbox.
+- Add real Redis integration tests for duplicate job submission, retry/backoff, worker restart, lock exclusion, cancellation, retention cleanup, and Redis loss/recovery. Business-state assertions must prove a failed or repeated reindex never changes PostgreSQL truth.
 
 ## Scope control
 

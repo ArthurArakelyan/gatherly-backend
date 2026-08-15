@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: Quality and behavioral tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+
+      - name: Check changed migrations for contract operations
+        if: github.event_name == 'pull_request'
+        env:
+          MIGRATION_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-migration-safety.mjs
+
+      - name: Install frozen dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: yarn prisma:generate
+
+      - name: Validate Prisma schema
+        run: yarn prisma:validate
+
+      - name: Typecheck
+        run: yarn typecheck
+
+      - name: Lint
+        run: yarn lint
+
+      - name: Check formatting
+        run: yarn format:check
+
+      - name: Run behavioral suite
+        run: yarn test
+
+      - name: Build application
+        run: yarn build
+
+      - name: Build runtime image
+        run: docker build --target runtime --tag gatherly-ci:${{ github.sha }} .
+
+      - name: Inspect runtime user
+        run: |
+          test "$(docker run --rm --entrypoint id gatherly-ci:${{ github.sha }} -u)" != "0"

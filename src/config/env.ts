@@ -4,6 +4,18 @@ import { elasticsearchEnvironmentShape } from './elasticsearch-environment.js';
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  DEPLOYMENT_ENVIRONMENT: z
+    .enum(['development', 'test', 'staging', 'production'])
+    .default('development'),
+  DEPLOYMENT_SLOT: z.enum(['local', 'blue', 'green']).default('local'),
+  APP_REVISION: z
+    .string()
+    .regex(/^[0-9a-f]{7,40}$|^development$/)
+    .default('development'),
+  APP_IMAGE_DIGEST: z
+    .string()
+    .regex(/^sha256:[0-9a-f]{64}$/)
+    .optional(),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   PGHOST: z.string().min(1),
   PGPORT: z.coerce.number().int().min(1).max(65_535).default(5432),

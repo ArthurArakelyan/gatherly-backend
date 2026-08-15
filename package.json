@@ -10,9 +10,9 @@
     "yarn": ">=1.22.22 <2"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch --import ./src/instrumentation.ts src/server.ts",
     "build": "yarn prisma:generate && tsc -p tsconfig.build.json",
-    "start": "node dist/server.js",
+    "start": "node --experimental-loader=@opentelemetry/instrumentation/hook.mjs --import ./dist/instrumentation.js dist/server.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -25,6 +25,7 @@
     "test:api": "vitest run tests/api",
     "test:integration": "vitest run tests/integration --passWithNoTests",
     "test:e2e": "vitest run tests/e2e",
+    "deploy:production": "node scripts/deploy-blue-green.mjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "db:pull": "prisma db pull",
@@ -36,10 +37,12 @@
     "db:migrate:status": "prisma migrate status",
     "search:reindex": "tsx src/workers/search-reindex.ts",
     "search:reindex:prod": "node dist/workers/search-reindex.js",
+    "search:reconcile": "tsx src/workers/search-reconcile.ts",
+    "search:reconcile:prod": "node dist/workers/search-reconcile.js",
     "kafka:outbox": "tsx src/workers/outbox-publisher.ts",
-    "kafka:outbox:prod": "node dist/workers/outbox-publisher.js",
+    "kafka:outbox:prod": "node --experimental-loader=@opentelemetry/instrumentation/hook.mjs --import ./dist/instrumentation.js dist/workers/outbox-publisher.js",
     "kafka:search-consumer": "tsx src/workers/search-projection-consumer.ts",
-    "kafka:search-consumer:prod": "node dist/workers/search-projection-consumer.js"
+    "kafka:search-consumer:prod": "node --experimental-loader=@opentelemetry/instrumentation/hook.mjs --import ./dist/instrumentation.js dist/workers/search-projection-consumer.js"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.4.3",
@@ -64,6 +67,7 @@
     "pg": "^8.22.0",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
+    "prom-client": "^15.1.3",
     "redis": "^6.2.0",
     "ws": "^8.21.1",
     "zod": "^4.4.3"

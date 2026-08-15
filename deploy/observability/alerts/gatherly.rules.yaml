@@ -1,0 +1,79 @@
+groups:
+  - name: gatherly-core
+    rules:
+      - alert: GatherlyApiTargetDown
+        expr: sum(up{job=~"gatherly-api.*"}) < 1
+        for: 2m
+        labels:
+          severity: critical
+          service: gatherly-api
+        annotations:
+          summary: Gatherly API metrics target is down
+          impact: The process or private metrics path is unavailable.
+          runbook: deploy/runbooks/api-target-down.md
+
+      - alert: GatherlyElevatedServerErrors
+        expr: |
+          sum(rate(gatherly_http_requests_total{status_class="5xx"}[10m]))
+          /
+          clamp_min(sum(rate(gatherly_http_requests_total[10m])), 0.01)
+          > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          service: gatherly-api
+        annotations:
+          summary: More than 5% of Gatherly requests are server errors
+          impact: Core API users are receiving failed requests.
+          runbook: deploy/runbooks/elevated-http-errors.md
+
+      - alert: GatherlyHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(gatherly_http_request_duration_seconds_bucket[10m]))
+          ) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          service: gatherly-api
+        annotations:
+          summary: Gatherly p95 HTTP latency exceeds 500 ms
+          impact: API responses are slower than the learning objective.
+          runbook: deploy/runbooks/high-http-latency.md
+
+  - name: gatherly-async
+    rules:
+      - alert: GatherlyOutboxStale
+        expr: gatherly_outbox_oldest_unpublished_age_seconds > 60
+        for: 5m
+        labels:
+          severity: warning
+          service: gatherly-outbox-publisher
+        annotations:
+          summary: Gatherly outbox publication is stale
+          impact: Search projection changes are delayed.
+          runbook: deploy/runbooks/outbox-stale.md
+
+      - alert: GatherlySearchProjectionStale
+        expr: |
+          time() - gatherly_search_projection_last_success_timestamp_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+          service: gatherly-search-consumer
+        annotations:
+          summary: Search projection has no recent success
+          impact: Event discovery may be stale.
+          runbook: deploy/runbooks/search-projection-stale.md
+
+      - alert: GatherlySearchProjectionDrift
+        expr: sum(gatherly_search_reconciliation_drift) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: gatherly-search
+        annotations:
+          summary: Elasticsearch differs from PostgreSQL
+          impact: Search results are missing, stale, or ineligible.
+          runbook: deploy/runbooks/search-drift.md

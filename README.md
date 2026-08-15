@@ -77,6 +77,37 @@ docker compose down
 Unlike the development stack, the production-style image does not mount
 `src/`. Rebuild it to include source changes.
 
+### Observability interfaces
+
+Start the production-style stack with its optional observability services:
+
+```powershell
+docker compose -f compose.yaml -f compose.observability.yaml up --detach --build
+```
+
+The local interfaces bind only to loopback:
+
+- Prometheus: `http://127.0.0.1:9090`
+- Alertmanager: `http://127.0.0.1:9093`
+- Grafana: `http://127.0.0.1:3001`
+- Uptime Kuma: `http://127.0.0.1:3002`
+
+OpenTelemetry has no separate UI. Traces are queried in Grafana through the
+Tempo data source. Application and worker metrics, plus the Collector's own
+internal telemetry, are queried through Prometheus or Grafana's Prometheus data
+source. Prometheus scrapes the private `otel-collector:8888/metrics` endpoint;
+port `8888` is deliberately not published to the host.
+
+Useful starter PromQL queries are:
+
+```promql
+up{job="otel-collector"}
+{__name__=~"otelcol_.*"}
+rate(otelcol_receiver_accepted_spans_total[5m])
+rate(otelcol_exporter_sent_spans_total[5m])
+rate(otelcol_exporter_send_failed_spans_total[5m])
+```
+
 ### PostgreSQL and database commands
 
 The commands below use the example database and user names from `.env.example`.
@@ -285,8 +316,8 @@ Docker must be running for `yarn test`, `yarn test:api`, and
 - Code quality: ESLint flat config, TypeScript-ESLint, Prettier, and ESLint’s Prettier compatibility config.
 
 Infrastructure clients are activated only when their roadmap increment is
-implemented. PostgreSQL, Prisma, Redis, WebSockets, Elasticsearch, and Kafka
-are now configured; OpenTelemetry remains deferred:
+implemented. PostgreSQL, Prisma, Redis, WebSockets, Elasticsearch, Kafka, and
+OpenTelemetry are now configured:
 
 ```text
 Raw PostgreSQL phase  pg
@@ -296,7 +327,7 @@ Redis phase           redis
 WebSocket phase       ws
 Elasticsearch phase   @elastic/elasticsearch (active)
 Kafka phase           kafkajs (active)
-OpenTelemetry phase   Node SDK, auto-instrumentation, Pino instrumentation, OTLP exporters (deferred)
+OpenTelemetry phase   Node SDK, auto-instrumentation, Pino instrumentation, OTLP exporters (active)
 ```
 
 Having a package installed does not move that technology earlier in the
@@ -740,8 +771,6 @@ Add each technology only when there is a demonstrated lesson or product need:
 4. Add WebSockets for persisted chat, typing, presence, and moderation.
 5. Add Elasticsearch as a rebuildable search projection with a full reindex command.
 6. Add Kafka for domain events and asynchronous consumers using a transactional outbox and idempotent processing.
-7. Add Pino structured logs, OpenTelemetry traces, metrics, Prometheus/Grafana/Tempo, and Uptime Kuma.
-8. Add CI/CD, immutable images, staging, smoke tests, backups, restore tests, rollback planning, and failure/load testing.
 
 Start Phase 6 with the build-it-yourself PostgreSQL measurement and Redis
 implementation guide in
@@ -782,28 +811,39 @@ PostgreSQL remains authoritative, malformed records have an explicit
 dead-letter path, and the guide proves the publish/mark and consume/commit crash
 windows with real infrastructure.
 
-When observability is introduced later, add explicit search-projection signals:
-attempt, success, and failure counters; last-success time; failure alerts; and a
-scheduled reconciliation check comparing eligible PostgreSQL events with the
-Elasticsearch projection. A stable application version does not make an index
-decay by itself, but a process crash or Elasticsearch outage can lose the
-current best-effort post-commit update and leave a missing, stale, or ineligible
-document. The operational runbook should rebuild after detected drift or a
-search outage; it should not blindly reindex on every deployment or schedule.
-A later transactional outbox and durable retry worker should make normal
-projection delivery self-healing, with reindex retained for schema changes and
-disaster recovery. Elasticsearch remains excluded from general readiness so a
-discovery outage does not take PostgreSQL-backed APIs out of service.
+Phase 7 adds explicit search-projection signals: attempt, success, failure,
+last-success time, failure alerts, and a scheduled reconciliation check between
+eligible PostgreSQL events and the Elasticsearch projection. Normal projection
+delivery is self-healing through the transactional outbox and durable consumer;
+full reindex remains the repair for confirmed drift, schema changes, and
+disaster recovery rather than a routine deployment or schedule action.
+Elasticsearch remains excluded from general readiness so a discovery outage
+does not take PostgreSQL-backed APIs out of service.
 
 Do not add Kubernetes or split the modular monolith into microservices for this project.
 
-### Late-stage deployment question
+### 7. Observability, CI/CD, and production hardening
+
+Add Pino production request/audit logging, OpenTelemetry traces, bounded
+Prometheus metrics, Prometheus/Grafana/Tempo, and Uptime Kuma. Then build CI/CD
+around immutable runtime and migration image digests from the same commit,
+separate staging and production environments, safe forward migrations, smoke
+checks, backups and restore drills, and failure/load testing.
+
+Follow the complete build-it-yourself guide in
+[`PHASE_7_OBSERVABILITY_CICD_PRODUCTION_HARDENING_HANDBOOK.md`](./PHASE_7_OBSERVABILITY_CICD_PRODUCTION_HARDENING_HANDBOOK.md).
+It adapts the proven inactive-slot/readiness/Nginx-switch/rollback pattern from
+the local `parinry-wpalchemy-backend` reference while accounting for Gatherly's
+PostgreSQL source of truth, separate worker roles, Kafka/Elasticsearch
+projection path, and long-lived SSE/WebSocket connections.
+
+The deployment question for this phase is:
 
 When the application is deployed with Docker, investigate:
 
 > How can Gatherly deploy a new immutable application image without stopping the currently working container first, so users do not experience a minute of total downtime?
 
-Use this question to learn readiness checks, graceful shutdown, reverse-proxy traffic switching, running old and new containers simultaneously, rolling or blue-green deployments, backward-compatible database migrations, automated rollback, and draining long-lived HTTP/SSE/WebSocket connections. Do not implement this machinery during the early learning phases.
+Use this question to learn readiness checks, graceful shutdown, reverse-proxy traffic switching, running old and new containers simultaneously, blue/green deployments, backward-compatible database migrations, automated traffic rollback, and draining long-lived HTTP/SSE/WebSocket connections. This is one-host zero-planned-downtime deployment, not host or database high availability.
 
 **Reverse-proxy decision:** use Nginx rather than Apache if Gatherly is eventually deployed. Nginx will sit in front of the Node/Express container to terminate TLS, expose ports 80/443, proxy HTTP/WebSocket/SSE traffic, and later help switch traffic between old and new application containers. It is not needed for local development and should not be installed or configured until the deployment stage.
 
@@ -859,7 +899,7 @@ Useful later topics include HTTP/TCP/DNS/TLS, CORS/CSRF/XSS defenses, API versio
 5. Minimal authentication and authorization
 6. Communities and events
 7. Reservations and waitlists
-8. First deployment and real users
+8. Skip the former real-user deployment milestone for this pet project
 9. Automated testing and container hardening
 10. Database indexes
 11. Redis
@@ -867,9 +907,11 @@ Useful later topics include HTTP/TCP/DNS/TLS, CORS/CSRF/XSS defenses, API versio
 13. WebSockets and chat
 14. Elasticsearch
 15. Kafka and transactional outbox
-16. Logging and tracing
-17. CI/CD and production hardening
-18. Performance and failure testing
+16. Structured logs, metrics, traces, dashboards, and alerts
+17. CI/CD, immutable images, staging, and blue/green production deployment
+18. Backups, restore drills, production hardening, and failure/load testing
 ```
 
-Real users intentionally appear before most advanced infrastructure. Their behavior should determine which later capabilities deserve investment.
+The former real-user MVP gate is intentionally skipped. Later infrastructure
+still requires a concrete learning objective and measured behavior rather than
+speculative product completeness.

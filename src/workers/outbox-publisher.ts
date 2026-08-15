@@ -1,14 +1,23 @@
 import 'dotenv/config';
 
-import pino from 'pino';
-
+import { shutdownTelemetry } from '../instrumentation.js';
 import { parseOutboxPublisherEnvironment } from '../config/kafka-worker-env.js';
 import { createKafkaClient } from '../infrastructure/kafka/client.js';
 import { OutboxRepository } from '../infrastructure/kafka/outbox.repository.js';
 import { createPrismaClient } from '../infrastructure/prisma/client.js';
 import { OutboxPublisherRunner } from './outbox-publisher-runner.js';
+import { createApplicationMetrics } from '../infrastructure/observability/metrics.js';
+import { startInternalMetricsServer } from '../infrastructure/observability/internal-metrics-server.js';
+import { createLogger } from '../shared/logging/logger.js';
 
-const logger = pino();
+const logger = createLogger();
+const metrics = createApplicationMetrics();
+const metricsServer = startInternalMetricsServer(
+  metrics,
+  Number(process.env['METRICS_PORT'] ?? 9464),
+  logger,
+);
+
 const environment = parseOutboxPublisherEnvironment(process.env);
 const prisma = createPrismaClient(environment);
 const kafka = createKafkaClient(environment, 'outbox-publisher');
@@ -47,5 +56,11 @@ try {
   process.exitCode = 1;
 } finally {
   await Promise.allSettled([producer.disconnect(), prisma.$disconnect()]);
+  await new Promise<void>((resolvePromise) =>
+    metricsServer.close(() => {
+      resolvePromise();
+    }),
+  );
+  await shutdownTelemetry();
   logger.info('Outbox publisher stopped');
 }

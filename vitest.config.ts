@@ -6,9 +6,10 @@ export default defineConfig({
     globals: true,
     include: ['tests/**/*.test.ts'],
     // Integration files each start disposable infrastructure. Keeping the
-    // worker count below the host CPU count prevents Docker from running a
-    // dozen PostgreSQL/Kafka/Elasticsearch containers at the same time.
-    maxWorkers: 4,
+    // Keep infrastructure-heavy suites below the host CPU count. More than two
+    // concurrent files can start enough PostgreSQL/Kafka/Elasticsearch
+    // containers for Kafka startup to become flaky on ordinary CI runners.
+    maxWorkers: 2,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],

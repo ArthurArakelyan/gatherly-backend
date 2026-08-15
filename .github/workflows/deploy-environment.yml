@@ -1,0 +1,104 @@
+name: Deploy environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      runtime_image:
+        required: true
+        type: string
+      migration_image:
+        required: true
+        type: string
+      revision:
+        required: true
+        type: string
+    secrets:
+      DEPLOY_SSH_PRIVATE_KEY:
+        required: true
+      DEPLOY_SSH_KNOWN_HOSTS:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.DEPLOY_PUBLIC_URL }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_APP_DIR: ${{ vars.DEPLOY_APP_DIR }}
+      DEPLOY_PUBLIC_URL: ${{ vars.DEPLOY_PUBLIC_URL }}
+
+    steps:
+      - name: Validate target configuration
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_PORT"
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_APP_DIR"
+          test -n "$DEPLOY_PUBLIC_URL"
+          test -n "$SSH_KEY"
+          test -n "$KNOWN_HOSTS"
+          case '${{ inputs.runtime_image }}' in *@sha256:*) ;; *) exit 1 ;; esac
+          case '${{ inputs.migration_image }}' in *@sha256:*) ;; *) exit 1 ;; esac
+
+      - name: Configure verified SSH
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/deploy" "$HOME/.ssh/known_hosts"
+
+      - name: Deploy reviewed image pair
+        shell: bash
+        env:
+          RUNTIME_IMAGE: ${{ inputs.runtime_image }}
+          MIGRATION_IMAGE: ${{ inputs.migration_image }}
+          REVISION: ${{ inputs.revision }}
+        run: |
+          ssh \
+            -i "$HOME/.ssh/deploy" \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash -s -- '$DEPLOY_APP_DIR' '$REVISION' '$RUNTIME_IMAGE' '$MIGRATION_IMAGE' '$DEPLOY_PUBLIC_URL'" <<'REMOTE'
+          set -euo pipefail
+
+          app_dir="$1"
+          revision="$2"
+          runtime_image="$3"
+          migration_image="$4"
+          public_url="$5"
+
+          cd "$app_dir"
+          git fetch origin main
+          git checkout --detach "$revision"
+
+          DEPLOY_VERIFY_URL="$public_url" \
+            flock --nonblock /var/lock/gatherly-deploy.lock \
+            yarn deploy:production \
+              --runtime-image "$runtime_image" \
+              --migration-image "$migration_image" \
+              --revision "$revision"
+          REMOTE

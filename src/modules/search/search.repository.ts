@@ -107,14 +107,14 @@ export class SearchRepository {
         query.q === null
           ? { match_all: {} }
           : {
-            multi_match: {
-              query: query.q,
-              fields: ['title^4', 'communityName^2', 'description'],
-              type: 'best_fields',
-              fuzziness: 'AUTO',
-              prefix_length: 1,
-            },
-          };
+              multi_match: {
+                query: query.q,
+                fields: ['title^4', 'communityName^2', 'description'],
+                type: 'best_fields',
+                fuzziness: 'AUTO',
+                prefix_length: 1,
+              },
+            };
 
       const sort: estypes.Sort =
         query.q === null

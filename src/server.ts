@@ -2,9 +2,9 @@ import 'dotenv/config';
 
 import { createServer } from 'node:http';
 
-import pino from 'pino';
-
+import { shutdownTelemetry } from './instrumentation.js';
 import { createApp } from './app.js';
+import { createLogger } from './shared/logging/logger.js';
 import { environment } from './config/env.js';
 import { createPool } from './infrastructure/postgres/pool.js';
 import { createPrismaClient } from './infrastructure/prisma/client.js';
@@ -67,26 +67,11 @@ import { SearchController } from './modules/search/search.controller.js';
 import { SearchRepository } from './modules/search/search.repository.js';
 import { createSearchRouter } from './modules/search/search.routes.js';
 import { SearchService } from './modules/search/search.service.js';
+import { createApplicationMetrics } from './infrastructure/observability/metrics.js';
+import { createBuildInfo } from './config/build-info.js';
 
-const pinoConfig = {
-  redact: {
-    paths: [
-      'req.headers.authorization',
-      'request.headers.authorization',
-      'headers.authorization',
-      'password',
-      '*.password',
-      '*.passwordHash',
-    ],
-    censor: '[REDACTED]',
-  },
-};
-
-const logger = pino(
-  environment.NODE_ENV === 'development'
-    ? { ...pinoConfig, transport: { target: 'pino-pretty' } }
-    : pinoConfig,
-);
+const logger = createLogger();
+const metrics = createApplicationMetrics();
 
 const pool = createPool(environment);
 const prisma = createPrismaClient(environment);
@@ -216,6 +201,7 @@ const app = createApp({
   corsOrigin: environment.CORS_ORIGIN,
   enableHttpLogging: environment.NODE_ENV === 'development',
   logger,
+  buildInfo: createBuildInfo(),
   checkReadiness,
   isShuttingDown: () => shutdownState.started,
   communitiesRouter,
@@ -226,6 +212,7 @@ const app = createApp({
   realtimeRouter,
   chatRouter,
   searchRouter,
+  metrics,
 });
 
 const server = createServer(app);
@@ -266,6 +253,7 @@ const gracefulShutdown = createGracefulShutdown({
       prisma.$disconnect(),
       pool.end(),
     ]);
+    await shutdownTelemetry();
   },
 });
 

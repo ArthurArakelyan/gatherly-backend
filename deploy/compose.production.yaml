@@ -1,0 +1,142 @@
+x-gatherly-api: &gatherly-api
+  image: ${APP_IMAGE:?APP_IMAGE must be an immutable digest reference}
+  pull_policy: never
+  env_file:
+    - .env.production
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  restart: unless-stopped
+  stop_grace_period: 30s
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 100
+  mem_limit: 512m
+  healthcheck:
+    test:
+      - CMD
+      - node
+      - -e
+      - fetch('http://127.0.0.1:3000/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+    interval: 5s
+    timeout: 3s
+    retries: 12
+    start_period: 10s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '5'
+
+services:
+  # The base development/local service remains available outside this overlay,
+  # but is never part of a production profile.
+  app:
+    profiles: [local-only]
+
+  app-blue:
+    <<: *gatherly-api
+    profiles: [blue]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-production}
+      DEPLOYMENT_SLOT: blue
+      APP_REVISION: ${APP_REVISION:?set APP_REVISION}
+      APP_IMAGE_DIGEST: ${APP_IMAGE_DIGEST:?set APP_IMAGE_DIGEST}
+      OTEL_SERVICE_NAME: gatherly-api
+    ports:
+      - '127.0.0.1:${BLUE_PORT:-3101}:3000'
+
+  app-green:
+    <<: *gatherly-api
+    profiles: [green]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-production}
+      DEPLOYMENT_SLOT: green
+      APP_REVISION: ${APP_REVISION:?set APP_REVISION}
+      APP_IMAGE_DIGEST: ${APP_IMAGE_DIGEST:?set APP_IMAGE_DIGEST}
+      OTEL_SERVICE_NAME: gatherly-api
+    ports:
+      - '127.0.0.1:${GREEN_PORT:-3102}:3000'
+
+  migration:
+    image: ${MIGRATION_IMAGE:?MIGRATION_IMAGE must be an immutable digest reference}
+    pull_policy: never
+    profiles: [tools]
+    env_file:
+      - .env.production
+    restart: 'no'
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+  outbox-publisher:
+    image: ${APP_IMAGE:?APP_IMAGE must be an immutable digest reference}
+    pull_policy: never
+    env_file:
+      - .env.production
+    environment:
+      DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-production}
+      APP_REVISION: ${APP_REVISION:?set APP_REVISION}
+      APP_IMAGE_DIGEST: ${APP_IMAGE_DIGEST:?set APP_IMAGE_DIGEST}
+      OTEL_SERVICE_NAME: gatherly-outbox-publisher
+      METRICS_PORT: 9464
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  search-consumer:
+    image: ${APP_IMAGE:?APP_IMAGE must be an immutable digest reference}
+    pull_policy: never
+    env_file:
+      - .env.production
+    environment:
+      DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-production}
+      APP_REVISION: ${APP_REVISION:?set APP_REVISION}
+      APP_IMAGE_DIGEST: ${APP_IMAGE_DIGEST:?set APP_IMAGE_DIGEST}
+      OTEL_SERVICE_NAME: gatherly-search-consumer
+      METRICS_PORT: 9465
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  search-reconcile:
+    image: ${APP_IMAGE:?APP_IMAGE must be an immutable digest reference}
+    pull_policy: never
+    profiles: [tools]
+    command: node dist/workers/search-reconcile.js
+    env_file:
+      - .env.production
+    environment:
+      DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-production}
+      APP_REVISION: ${APP_REVISION:?set APP_REVISION}
+      APP_IMAGE_DIGEST: ${APP_IMAGE_DIGEST:?set APP_IMAGE_DIGEST}
+      OTEL_SERVICE_NAME: gatherly-search-reconcile
+    restart: 'no'
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 384m
+    pids_limit: 100
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
